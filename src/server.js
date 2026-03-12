@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git.js";
 import { createRunStore } from "./lib/runStore.js";
-import { cancelRun, generateRunTitle, runMode } from "./lib/runner.js";
+import { cancelRun, deleteRun, generateRunTitle, runMode } from "./lib/runner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -274,6 +274,16 @@ async function handleApi(request, response, url) {
   const runIdMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
   if (request.method === "GET" && runIdMatch) {
     const run = store.getRun(decodeURIComponent(runIdMatch[1]));
+    if (!run) {
+      sendError(response, 404, "Run not found.");
+      return;
+    }
+    sendJson(response, 200, { run });
+    return;
+  }
+
+  if (request.method === "DELETE" && runIdMatch) {
+    const run = deleteRun(store, decodeURIComponent(runIdMatch[1]));
     if (!run) {
       sendError(response, 404, "Run not found.");
       return;

@@ -10,6 +10,7 @@ const state = {
   browserTarget: null,
   browserPath: null,
   projectInspect: null,
+  projectFilters: [],
   eventSource: null,
   autoWorktreeRoot: null,
   drawerOpen: false,
@@ -44,6 +45,7 @@ const el = {
   inspectRepoRoot: $("#inspectRepoRoot"),
   inspectBranch: $("#inspectBranch"),
   inspectHead: $("#inspectHead"),
+  projectFilters: $("#projectFilters"),
   runsList: $("#runsList"),
   runCountBadge: $("#runCountBadge"),
   mainContent: $("#mainContent"),
@@ -135,6 +137,49 @@ function getPathLeaf(targetPath) {
   if (!source) return "";
   const segments = source.split(/[\\/]/).filter(Boolean);
   return segments[segments.length - 1] || source;
+}
+
+function getProjectPath(run) {
+  return run?.config?.projectPath || "";
+}
+
+function getProjectFilterOptions() {
+  const projectPaths = Array.from(new Set(state.runs.map(getProjectPath).filter(Boolean)))
+    .sort((left, right) => {
+      const byLeaf = getPathLeaf(left).localeCompare(getPathLeaf(right));
+      return byLeaf || left.localeCompare(right);
+    });
+
+  const leafCounts = new Map();
+  for (const projectPath of projectPaths) {
+    const leaf = getPathLeaf(projectPath) || projectPath;
+    leafCounts.set(leaf, (leafCounts.get(leaf) || 0) + 1);
+  }
+
+  return projectPaths.map((projectPath) => {
+    const leaf = getPathLeaf(projectPath) || projectPath;
+    return {
+      value: projectPath,
+      label: leafCounts.get(leaf) > 1 ? projectPath : leaf,
+    };
+  });
+}
+
+function normalizeProjectFilters() {
+  const options = getProjectFilterOptions();
+  const optionValues = new Set(options.map((option) => option.value));
+  state.projectFilters = Array.from(new Set(state.projectFilters))
+    .filter((value) => optionValues.has(value));
+  return options;
+}
+
+function getVisibleRuns() {
+  if (state.projectFilters.length === 0) {
+    return state.runs;
+  }
+
+  const activeFilters = new Set(state.projectFilters);
+  return state.runs.filter((run) => activeFilters.has(getProjectPath(run)));
 }
 
 /* ─── Toast System ─── */
@@ -232,6 +277,45 @@ function getSelectedRun() {
   return state.selectedRunId ? state.runDetails.get(state.selectedRunId) || null : null;
 }
 
+async function syncSelectedRun() {
+  normalizeProjectFilters();
+  const visibleRuns = getVisibleRuns();
+  const selectedRunIsVisible = visibleRuns.some((run) => run.id === state.selectedRunId);
+
+  if (!selectedRunIsVisible) {
+    state.selectedRunId = visibleRuns[0]?.id || null;
+    state.selectedAgentId = null;
+    state.activeTab = "overview";
+  }
+
+  renderRuns();
+
+  if (!state.selectedRunId) {
+    renderRunDetail();
+    return;
+  }
+
+  if (!state.runDetails.has(state.selectedRunId)) {
+    await loadRunDetail(state.selectedRunId);
+    return;
+  }
+
+  renderRunDetail();
+}
+
+async function removeRunFromState(runId) {
+  state.runs = state.runs.filter((run) => run.id !== runId);
+  state.runDetails.delete(runId);
+
+  if (state.selectedRunId === runId) {
+    state.selectedRunId = null;
+    state.selectedAgentId = null;
+    state.activeTab = "overview";
+  }
+
+  await syncSelectedRun();
+}
+
 /* ─── Status Pill ─── */
 function statusPill(status) {
   const spinner = status === "running" ? `<span class="spinner"></span>` : "";
@@ -299,7 +383,19 @@ function createRunCard(summary) {
             ? `<div class="run-card-project" title="${escapeHtml(projectPath)}">${icons.folder}<span>${escapeHtml(projectFolder)}</span></div>`
             : ""}
         </div>
-        ${statusPill(summary.status)}
+        <div class="run-card-actions">
+          ${statusPill(summary.status)}
+          <button
+            class="btn-icon run-card-delete"
+            type="button"
+            title="Remove run"
+            aria-label="Remove run"
+            data-action="delete-run"
+            data-run-id="${escapeHtml(summary.id)}"
+          >
+            ${icons.x}
+          </button>
+        </div>
       </div>
       <div class="run-card-progress">
         <div class="progress-bar"><div class="progress-bar-fill${hasFail}" style="width:${progress}%"></div></div>
@@ -309,23 +405,50 @@ function createRunCard(summary) {
   `;
 }
 
-function renderRuns() {
-  el.runCountBadge.textContent = String(state.runs.length);
+function renderProjectFilter() {
+  const options = normalizeProjectFilters();
 
-  if (state.runs.length === 0) {
+  if (options.length === 0) {
+    el.projectFilters.innerHTML = `<div class="filter-chip-empty">No projects yet.</div>`;
+    return;
+  }
+
+  const activeFilters = new Set(state.projectFilters);
+  el.projectFilters.innerHTML = options.map((option) => `
+    <button
+      class="filter-chip${activeFilters.has(option.value) ? " is-active" : ""}"
+      type="button"
+      data-project-filter="${escapeHtml(option.value)}"
+      title="${escapeHtml(option.value)}"
+      aria-pressed="${activeFilters.has(option.value) ? "true" : "false"}"
+    >
+      <span class="filter-chip-label">${escapeHtml(option.label)}</span>
+    </button>
+  `).join("");
+}
+
+function renderRuns() {
+  renderProjectFilter();
+
+  const visibleRuns = getVisibleRuns();
+  el.runCountBadge.textContent = state.projectFilters.length > 0
+    ? `${visibleRuns.length}/${state.runs.length}`
+    : String(state.runs.length);
+
+  if (visibleRuns.length === 0) {
     el.runsList.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
         </div>
-        <p class="empty-title">No runs yet</p>
-        <p class="empty-desc">Click "New Run" to get started</p>
+        <p class="empty-title">${escapeHtml(state.projectFilters.length > 0 ? "No matching runs" : "No runs yet")}</p>
+        <p class="empty-desc">${escapeHtml(state.projectFilters.length > 0 ? "Adjust the project filters." : "Click \"New Run\" to get started")}</p>
       </div>
     `;
     return;
   }
 
-  el.runsList.innerHTML = state.runs.map(createRunCard).join("");
+  el.runsList.innerHTML = visibleRuns.map(createRunCard).join("");
 }
 
 /* ─── Render: Run Detail ─── */
@@ -401,27 +524,26 @@ function renderAgentDetailTabs(agent) {
     `;
   }
 
+  const activeTab = state.activeTab === "items" ? "history" : (state.activeTab || "overview");
+  const directory = agent.workingDirectory || agent.worktreePath || "Pending";
+
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "response", label: "Response" },
     { key: "review", label: "Review" },
+    { key: "history", label: `History (${agent.items.length})` },
     { key: "logs", label: `Logs (${agent.logs.length})` },
-    { key: "items", label: `Items (${agent.items.length})` },
   ];
-
-  const activeTab = state.activeTab || "overview";
 
   const overviewPanel = `
     <div class="tab-panel${activeTab === "overview" ? " is-active" : ""}" data-tab="overview">
       <div class="meta-group">
         <div class="meta-row"><span class="meta-row-label">Status</span>${statusPill(agent.status)}</div>
-        <div class="meta-row"><span class="meta-row-label">Worktree</span><span class="mono">${escapeHtml(agent.worktreePath || "Pending")}</span></div>
-        <div class="meta-row"><span class="meta-row-label">Working dir</span><span class="mono">${escapeHtml(agent.workingDirectory || "Pending")}</span></div>
-        <div class="meta-row"><span class="meta-row-label">Base ref</span><span>${escapeHtml(agent.baseRef || "Pending")}</span></div>
-        <div class="meta-row"><span class="meta-row-label">Started</span><span>${escapeHtml(formatDate(agent.startedAt))}</span></div>
-        <div class="meta-row"><span class="meta-row-label">Completed</span><span>${escapeHtml(formatDate(agent.completedAt))}</span></div>
-        ${agent.usage ? `<div class="meta-row"><span class="meta-row-label">Tokens</span><span>${escapeHtml(`${agent.usage.input_tokens} in / ${agent.usage.output_tokens} out / ${agent.usage.total_tokens} total`)}</span></div>` : ""}
-        ${agent.error ? `<div class="meta-row"><span class="meta-row-label">Error</span><span style="color:var(--danger)">${escapeHtml(agent.error)}</span></div>` : ""}
+        <div class="meta-row"><span class="meta-row-label">Directory</span><span class="meta-row-value mono">${escapeHtml(directory)}</span></div>
+        <div class="meta-row"><span class="meta-row-label">Started</span><span class="meta-row-value">${escapeHtml(formatDate(agent.startedAt))}</span></div>
+        <div class="meta-row"><span class="meta-row-label">Completed</span><span class="meta-row-value">${escapeHtml(formatDate(agent.completedAt))}</span></div>
+        ${agent.usage ? `<div class="meta-row"><span class="meta-row-label">Tokens</span><span class="meta-row-value">${escapeHtml(`${agent.usage.input_tokens} in / ${agent.usage.output_tokens} out / ${agent.usage.total_tokens} total`)}</span></div>` : ""}
+        ${agent.error ? `<div class="meta-row"><span class="meta-row-label">Error</span><span class="meta-row-value" style="color:var(--danger)">${escapeHtml(agent.error)}</span></div>` : ""}
       </div>
       <div class="review-section">
         <div class="review-section-title">Prompt</div>
@@ -460,7 +582,21 @@ function renderAgentDetailTabs(agent) {
 
   const reviewPanel = `
     <div class="tab-panel${activeTab === "review" ? " is-active" : ""}" data-tab="review">
+      <div class="tab-panel-toolbar">
+        <button class="btn btn-ghost btn-sm" type="button" data-action="refresh-review">${icons.refresh} Refresh Review</button>
+      </div>
       ${reviewContent}
+    </div>
+  `;
+
+  const historyPanel = `
+    <div class="tab-panel${activeTab === "history" ? " is-active" : ""}" data-tab="history">
+      ${agent.items.length ? agent.items.map((item) => `
+        <div class="review-section">
+          <div class="review-section-title">${escapeHtml(item.type)}</div>
+          <pre class="code-block">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+        </div>
+      `).join("") : `<div class="text-muted text-sm">No streamed history recorded yet.</div>`}
     </div>
   `;
 
@@ -478,24 +614,12 @@ function renderAgentDetailTabs(agent) {
     </div>
   `;
 
-  const itemsPanel = `
-    <div class="tab-panel${activeTab === "items" ? " is-active" : ""}" data-tab="items">
-      ${agent.items.length ? agent.items.map((item) => `
-        <div class="review-section">
-          <div class="review-section-title">${escapeHtml(item.type)}</div>
-          <pre class="code-block">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
-        </div>
-      `).join("") : `<div class="text-muted text-sm">No streamed items recorded yet.</div>`}
-    </div>
-  `;
-
   return `
     <div class="agent-detail">
       <div class="agent-detail-header">
         <div class="agent-detail-title">${escapeHtml(agent.title)}</div>
         <div class="agent-detail-header-actions">
           ${statusPill(agent.status)}
-          <button class="btn btn-ghost btn-sm" type="button" data-action="refresh-review">${icons.refresh} Refresh Review</button>
         </div>
       </div>
       <div class="tab-bar">
@@ -506,8 +630,8 @@ function renderAgentDetailTabs(agent) {
       ${overviewPanel}
       ${responsePanel}
       ${reviewPanel}
+      ${historyPanel}
       ${logsPanel}
-      ${itemsPanel}
     </div>
   `;
 }
@@ -533,6 +657,7 @@ function renderRunDetail() {
 
   const selectedAgent = run.agents.find((a) => a.id === state.selectedAgentId) || null;
   const canCancel = run.status === "running" || run.status === "queued";
+  const baseRef = run.config.baseRef || run.projectContext?.branchName || run.projectContext?.headSha || "Current HEAD";
 
   el.mainContent.innerHTML = `
     <div class="run-detail">
@@ -562,6 +687,10 @@ function renderRunDetail() {
         <div class="info-card">
           <div class="info-card-label">Concurrency</div>
           <div class="info-card-value">${escapeHtml(run.config.concurrency)}</div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Base Ref</div>
+          <div class="info-card-value">${escapeHtml(baseRef)}</div>
         </div>
         <div class="info-card">
           <div class="info-card-label">Started</div>
@@ -657,39 +786,40 @@ async function loadRuns() {
   const payload = await fetchJson("/api/runs");
   state.runs = payload.runs;
   sortRuns();
-
-  if (!state.selectedRunId && state.runs[0]) {
-    state.selectedRunId = state.runs[0].id;
-    await loadRunDetail(state.selectedRunId);
-  } else {
-    renderRuns();
-    renderRunDetail();
-  }
+  await syncSelectedRun();
 }
 
 async function loadRunDetail(runId) {
-  const payload = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
-  state.runDetails.set(runId, payload.run);
-  upsertRunSummary({
-    id: payload.run.id,
-    mode: normalizeMode(payload.run.mode ?? payload.run.workflowType),
-    title: payload.run.title,
-    status: payload.run.status,
-    createdAt: payload.run.createdAt,
-    startedAt: payload.run.startedAt,
-    completedAt: payload.run.completedAt,
-    cancelRequested: payload.run.cancelRequested,
-    totalAgents: payload.run.agents.length,
-    completedAgents: payload.run.agents.filter((a) => a.status === "completed").length,
-    failedAgents: payload.run.agents.filter((a) => a.status === "failed").length,
-    cancelledAgents: payload.run.agents.filter((a) => a.status === "cancelled").length,
-    runningAgents: payload.run.agents.filter((a) => a.status === "running").length,
-    queuedAgents: payload.run.agents.filter((a) => a.status === "queued").length,
-    config: payload.run.config,
-    generation: payload.run.generation,
-  });
-  renderRuns();
-  renderRunDetail();
+  try {
+    const payload = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
+    state.runDetails.set(runId, payload.run);
+    upsertRunSummary({
+      id: payload.run.id,
+      mode: normalizeMode(payload.run.mode ?? payload.run.workflowType),
+      title: payload.run.title,
+      status: payload.run.status,
+      createdAt: payload.run.createdAt,
+      startedAt: payload.run.startedAt,
+      completedAt: payload.run.completedAt,
+      cancelRequested: payload.run.cancelRequested,
+      totalAgents: payload.run.agents.length,
+      completedAgents: payload.run.agents.filter((a) => a.status === "completed").length,
+      failedAgents: payload.run.agents.filter((a) => a.status === "failed").length,
+      cancelledAgents: payload.run.agents.filter((a) => a.status === "cancelled").length,
+      runningAgents: payload.run.agents.filter((a) => a.status === "running").length,
+      queuedAgents: payload.run.agents.filter((a) => a.status === "queued").length,
+      config: payload.run.config,
+      generation: payload.run.generation,
+    });
+    renderRuns();
+    renderRunDetail();
+  } catch (error) {
+    if (error.message === "Run not found.") {
+      await removeRunFromState(runId);
+      return;
+    }
+    throw error;
+  }
 }
 
 /* ─── SSE ─── */
@@ -704,25 +834,26 @@ function connectEvents() {
     el.connectionDot.className = "conn-dot is-connected";
   });
 
-  state.eventSource.addEventListener("runs.snapshot", (event) => {
+  state.eventSource.addEventListener("runs.snapshot", async (event) => {
     const payload = JSON.parse(event.data);
     state.runs = payload.runs;
     sortRuns();
-    if (!state.selectedRunId && state.runs[0]) {
-      state.selectedRunId = state.runs[0].id;
-      void loadRunDetail(state.selectedRunId);
-    } else {
-      renderRuns();
-    }
+    await syncSelectedRun();
   });
 
-  state.eventSource.addEventListener("run.updated", (event) => {
+  state.eventSource.addEventListener("run.updated", async (event) => {
     const payload = JSON.parse(event.data);
     upsertRunSummary(payload.summary);
     state.runDetails.set(payload.run.id, payload.run);
-    renderRuns();
-    if (!state.selectedRunId) state.selectedRunId = payload.run.id;
-    if (state.selectedRunId === payload.run.id) renderRunDetail();
+    if (!state.selectedRunId && getVisibleRuns()[0]) {
+      state.selectedRunId = getVisibleRuns()[0].id;
+    }
+    await syncSelectedRun();
+  });
+
+  state.eventSource.addEventListener("run.deleted", async (event) => {
+    const payload = JSON.parse(event.data);
+    await removeRunFromState(payload.runId);
   });
 
   state.eventSource.addEventListener("error", () => {
@@ -788,6 +919,9 @@ async function submitRun(event) {
 
     state.selectedRunId = response.run.id;
     state.selectedAgentId = null;
+    if (state.projectFilters.length > 0 && !state.projectFilters.includes(response.run.config.projectPath)) {
+      state.projectFilters = [...state.projectFilters, response.run.config.projectPath];
+    }
     state.runDetails.set(response.run.id, response.run);
     await loadRunDetail(response.run.id);
     closeDrawer();
@@ -807,6 +941,31 @@ async function cancelSelectedRun() {
     showToast("info", "Cancel requested", "The run will stop after current agents finish.");
   } catch (error) {
     showToast("error", "Cancel failed", error.message);
+  }
+}
+
+async function deleteRunById(runId) {
+  const run = state.runs.find((entry) => entry.id === runId);
+  if (!run) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    run.status === "running" || run.status === "queued"
+      ? `Remove "${run.title}"? Active agents will be cancelled.`
+      : `Remove "${run.title}"?`,
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await fetchJson(`/api/runs/${encodeURIComponent(runId)}`, { method: "DELETE" });
+    await removeRunFromState(runId);
+    showToast("success", "Run removed", run.title);
+  } catch (error) {
+    showToast("error", "Remove failed", error.message);
   }
 }
 
@@ -884,12 +1043,34 @@ function bindEvents() {
   el.browseWorktreeButton.addEventListener("click", () => openBrowser(el.worktreeRoot, "Choose Worktree Root"));
 
   el.runsList.addEventListener("click", async (event) => {
-    const card = event.target.closest("[data-run-id]");
+    const deleteButton = event.target.closest('[data-action="delete-run"]');
+    if (deleteButton) {
+      await deleteRunById(deleteButton.dataset.runId);
+      return;
+    }
+
+    const card = event.target.closest(".run-card[data-run-id]");
     if (!card) return;
     state.selectedRunId = card.dataset.runId;
     state.selectedAgentId = null;
     state.activeTab = "overview";
     await loadRunDetail(state.selectedRunId);
+  });
+
+  el.projectFilters.addEventListener("click", async (event) => {
+    const filterChip = event.target.closest("[data-project-filter]");
+    if (!filterChip) return;
+
+    const projectPath = filterChip.dataset.projectFilter;
+    if (!projectPath) return;
+
+    if (state.projectFilters.includes(projectPath)) {
+      state.projectFilters = state.projectFilters.filter((value) => value !== projectPath);
+    } else {
+      state.projectFilters = [...state.projectFilters, projectPath];
+    }
+
+    await syncSelectedRun();
   });
 
   el.mainContent.addEventListener("click", async (event) => {

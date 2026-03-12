@@ -94,6 +94,7 @@ function getCodexClient() {
 function getExecutionState(runId) {
   if (!executionRegistry.has(runId)) {
     executionRegistry.set(runId, {
+      titleController: null,
       generationController: null,
       agentControllers: new Map(),
     });
@@ -104,6 +105,20 @@ function getExecutionState(runId) {
 
 function clearExecutionState(runId) {
   executionRegistry.delete(runId);
+}
+
+function maybeClearExecutionState(runId, execution) {
+  if (!execution) {
+    return;
+  }
+
+  if (execution.titleController || execution.generationController || execution.agentControllers.size > 0) {
+    return;
+  }
+
+  if (executionRegistry.get(runId) === execution) {
+    clearExecutionState(runId);
+  }
 }
 
 function buildAgentRecord(task, index) {
@@ -323,8 +338,8 @@ async function generateTasks(store, runId, projectContext) {
 
     throw error;
   } finally {
-    const latestExecution = getExecutionState(runId);
-    latestExecution.generationController = null;
+    execution.generationController = null;
+    maybeClearExecutionState(runId, execution);
   }
 }
 
@@ -339,6 +354,10 @@ export async function generateRunTitle(store, runId) {
     return run.title;
   }
 
+  const execution = getExecutionState(runId);
+  const controller = new AbortController();
+  execution.titleController = controller;
+
   const codex = getCodexClient();
   const thread = codex.startThread({
     model: run.config.model || undefined,
@@ -351,18 +370,29 @@ export async function generateRunTitle(store, runId) {
     modelReasoningEffort: "low",
   });
 
-  const result = await thread.run(buildRunTitlePrompt(run), {
-    outputSchema: buildRunTitleSchema(),
-  });
+  try {
+    const result = await thread.run(buildRunTitlePrompt(run), {
+      signal: controller.signal,
+      outputSchema: buildRunTitleSchema(),
+    });
 
-  const parsed = JSON.parse(result.finalResponse);
-  const nextTitle = sanitizeGeneratedTitle(parsed.title, run.title);
+    const parsed = JSON.parse(result.finalResponse);
+    const nextTitle = sanitizeGeneratedTitle(parsed.title, run.title);
 
-  store.updateRun(runId, (mutableRun) => {
-    mutableRun.title = nextTitle;
-  });
+    store.updateRun(runId, (mutableRun) => {
+      mutableRun.title = nextTitle;
+    });
 
-  return nextTitle;
+    return nextTitle;
+  } catch (error) {
+    if (isAbortError(error) || !store.getMutableRun(runId)) {
+      return null;
+    }
+    throw error;
+  } finally {
+    execution.titleController = null;
+    maybeClearExecutionState(runId, execution);
+  }
 }
 
 async function executeAgent(store, runId, agentId, projectContext) {
@@ -491,6 +521,7 @@ async function executeAgent(store, runId, agentId, projectContext) {
     });
   } finally {
     execution.agentControllers.delete(agentId);
+    maybeClearExecutionState(runId, execution);
   }
 }
 
@@ -584,7 +615,9 @@ export async function runMode(store, runId) {
     for (const controller of execution.agentControllers.values()) {
       controller.abort();
     }
-    clearExecutionState(runId);
+    execution.generationController = null;
+    execution.agentControllers.clear();
+    maybeClearExecutionState(runId, execution);
   }
 }
 
@@ -601,6 +634,7 @@ export function cancelRun(store, runId) {
   }
 
   const execution = executionRegistry.get(runId);
+  execution?.titleController?.abort();
   execution?.generationController?.abort();
   for (const controller of execution?.agentControllers.values() ?? []) {
     controller.abort();
@@ -608,4 +642,23 @@ export function cancelRun(store, runId) {
 
   store.updateRun(runId, () => {});
   return store.getRun(runId);
+}
+
+export function deleteRun(store, runId) {
+  const run = store.getMutableRun(runId);
+  if (!run) {
+    return null;
+  }
+
+  run.cancelRequested = true;
+
+  const execution = executionRegistry.get(runId);
+  execution?.titleController?.abort();
+  execution?.generationController?.abort();
+  for (const controller of execution?.agentControllers.values() ?? []) {
+    controller.abort();
+  }
+
+  clearExecutionState(runId);
+  return store.deleteRun(runId);
 }

@@ -85,6 +85,12 @@ export function createRunStore(dataDirectory) {
     response.write(`data: ${JSON.stringify(payload)}\n\n`);
   }
 
+  function broadcastEvent(eventName, payload) {
+    for (const response of subscribers) {
+      writeSse(response, eventName, payload);
+    }
+  }
+
   function flushBroadcasts() {
     if (broadcastTimer) {
       clearTimeout(broadcastTimer);
@@ -247,6 +253,19 @@ export function createRunStore(dataDirectory) {
     };
   }
 
+  function deleteRun(runId) {
+    const run = runs.get(runId);
+    if (!run) {
+      return null;
+    }
+
+    runs.delete(runId);
+    pendingRunBroadcasts.delete(runId);
+    schedulePersist();
+    broadcastEvent("run.deleted", { runId });
+    return clone(run);
+  }
+
   return {
     load,
     listSummaries,
@@ -256,6 +275,7 @@ export function createRunStore(dataDirectory) {
     updateRun,
     appendAgent,
     updateAgent,
+    deleteRun,
     subscribe,
   };
 }

@@ -39,8 +39,14 @@
     <div class="app-layout">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
-          <h2>Runs</h2>
-          <span class="badge" id="runCountBadge">0</span>
+          <div class="sidebar-title-row">
+            <h2>Runs</h2>
+            <span class="badge" id="runCountBadge">0</span>
+          </div>
+          <div class="sidebar-filter">
+            <span>Projects</span>
+            <div class="sidebar-filter-chips" id="projectFilters"></div>
+          </div>
         </div>
         <div class="runs-list" id="runsList">
           <div class="empty-state">
