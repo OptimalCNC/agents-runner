@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createCodexModelCatalog } from "./lib/codexModels.js";
 import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git.js";
 import { createRunStore } from "./lib/runStore.js";
 import { cancelRun, deleteRun, generateRunTitle, runMode } from "./lib/runner.js";
@@ -16,6 +17,7 @@ const dataDirectory = path.join(projectRoot, "data");
 const port = Number(process.env.PORT || 3000);
 
 const store = createRunStore(dataDirectory);
+const modelCatalog = createCodexModelCatalog();
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -74,6 +76,10 @@ async function hasCodexProfile() {
   } catch {
     return false;
   }
+}
+
+async function hasCodexCredentials() {
+  return Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || await hasCodexProfile());
 }
 
 function normalizeInteger(value, fallback, minimum, maximum) {
@@ -210,6 +216,22 @@ async function handleApi(request, response, url) {
 
   if (request.method === "GET" && url.pathname === "/api/runs") {
     sendJson(response, 200, { runs: store.listSummaries() });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/models") {
+    if (!await hasCodexCredentials()) {
+      sendError(
+        response,
+        503,
+        "No Codex credentials detected. Sign in with Codex or set OPENAI_API_KEY/CODEX_API_KEY.",
+      );
+      return;
+    }
+
+    const refresh = url.searchParams.get("refresh") === "1";
+    const payload = await modelCatalog.getModels({ refresh });
+    sendJson(response, 200, payload);
     return;
   }
 

@@ -15,6 +15,16 @@ const state = {
   autoWorktreeRoot: null,
   drawerOpen: false,
   inspectDebounceTimer: null,
+  modelCatalog: {
+    loading: false,
+    loaded: false,
+    stale: false,
+    fetchedAt: null,
+    models: [],
+    error: "",
+    request: null,
+  },
+  modelMenuOpen: false,
 };
 
 /* ─── DOM References ─── */
@@ -31,6 +41,18 @@ const el = {
   runForm: $("#runForm"),
   projectPath: $("#projectPath"),
   worktreeRoot: $("#worktreeRoot"),
+  baseRef: $("#baseRef"),
+  model: $("#model"),
+  modelCombobox: $("#modelCombobox"),
+  modelMenuButton: $("#modelMenuButton"),
+  refreshModelsButton: $("#refreshModelsButton"),
+  modelStatus: $("#modelStatus"),
+  modelMenu: $("#modelMenu"),
+  reasoningEffort: $("#reasoningEffort"),
+  sandboxMode: $("#sandboxMode"),
+  approvalPolicy: $("#approvalPolicy"),
+  networkAccessEnabled: $("#networkAccessEnabled"),
+  webSearchMode: $("#webSearchMode"),
   runCount: $("#runCount"),
   concurrency: $("#concurrency"),
   prompt: $("#prompt"),
@@ -70,6 +92,15 @@ const icons = {
   git: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>`,
   play: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
   refresh: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`,
+  bot: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>`,
+  terminal: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  fileCode: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="m10 13-2 2 2 2"/><path d="m14 17 2-2-2-2"/></svg>`,
+  brain: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>`,
+  checklist: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 5.5 5 7l2.5-2.5"/><path d="M3.5 11.5 5 13l2.5-2.5"/><path d="M3.5 17.5 5 19l2.5-2.5"/><line x1="11" y1="6" x2="20" y2="6"/><line x1="11" y1="12" x2="20" y2="12"/><line x1="11" y1="18" x2="20" y2="18"/></svg>`,
+  wrench: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+  search: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  alert: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+  dot: `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="4"/></svg>`,
 };
 
 /* ─── Helpers ─── */
@@ -80,6 +111,149 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function renderMarkdown(text) {
+  if (!text) return "";
+  if (typeof marked === "undefined") return `<pre>${escapeHtml(text)}</pre>`;
+  const raw = marked.parse(String(text), { breaks: true, gfm: true });
+  return DOMPurify.sanitize(raw);
+}
+
+function renderHistoryItem(item) {
+  switch (item.type) {
+    case "agent_message":
+      return `
+        <div class="tl-item">
+          <div class="tl-icon tl-icon-accent">${icons.bot}</div>
+          <div class="tl-body">
+            <div class="tl-label">Assistant</div>
+            <div class="markdown-body">${renderMarkdown(item.text)}</div>
+          </div>
+        </div>`;
+
+    case "command_execution": {
+      const failed = item.status === "failed" || (item.exit_code != null && item.exit_code !== 0);
+      const statusCls = failed ? "tl-icon-danger" : item.status === "in_progress" ? "tl-icon-muted" : "tl-icon-success";
+      return `
+        <div class="tl-item">
+          <div class="tl-icon ${statusCls}">${icons.terminal}</div>
+          <div class="tl-body">
+            <div class="tl-label">
+              Command
+              ${item.exit_code != null ? `<span class="tl-badge ${failed ? "tl-badge-danger" : "tl-badge-success"}">exit ${escapeHtml(String(item.exit_code))}</span>` : ""}
+              ${item.status ? `<span class="tl-badge">${escapeHtml(item.status)}</span>` : ""}
+            </div>
+            <pre class="tl-code">${escapeHtml(item.command || "")}</pre>
+            ${item.aggregated_output ? `
+              <details class="tl-details" open>
+                <summary>Output</summary>
+                <pre class="tl-output">${escapeHtml(item.aggregated_output)}</pre>
+              </details>` : ""}
+          </div>
+        </div>`;
+    }
+
+    case "file_change":
+      return `
+        <div class="tl-item">
+          <div class="tl-icon tl-icon-info">${icons.fileCode}</div>
+          <div class="tl-body">
+            <div class="tl-label">
+              File Changes
+              ${item.status ? `<span class="tl-badge ${item.status === "failed" ? "tl-badge-danger" : "tl-badge-success"}">${escapeHtml(item.status)}</span>` : ""}
+            </div>
+            <div class="tl-file-list">
+              ${(item.changes || []).map((c) => `<span class="tl-path"><span class="tl-badge tl-badge-${c.kind === "delete" ? "danger" : c.kind === "add" ? "success" : "info"}">${escapeHtml(c.kind || "update")}</span> ${escapeHtml(c.path)}</span>`).join("")}
+            </div>
+          </div>
+        </div>`;
+
+    case "reasoning":
+      return `
+        <div class="tl-item tl-item-muted">
+          <div class="tl-icon tl-icon-muted">${icons.brain}</div>
+          <div class="tl-body">
+            <details class="tl-details">
+              <summary class="tl-label">Reasoning</summary>
+              <div class="markdown-body markdown-body-muted">${renderMarkdown(item.text)}</div>
+            </details>
+          </div>
+        </div>`;
+
+    case "todo_list":
+      return `
+        <div class="tl-item">
+          <div class="tl-icon tl-icon-accent">${icons.checklist}</div>
+          <div class="tl-body">
+            <div class="tl-label">Todo List</div>
+            <ul class="tl-checklist">
+              ${(item.items || []).map((entry) => `
+                <li class="${entry.completed ? "is-done" : ""}">
+                  <span class="tl-check">${entry.completed ? icons.check : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>`}</span>
+                  ${escapeHtml(entry.text)}
+                </li>
+              `).join("")}
+            </ul>
+          </div>
+        </div>`;
+
+    case "mcp_tool_call": {
+      const mcpFailed = item.status === "failed" || item.error;
+      const mcpCls = mcpFailed ? "tl-icon-danger" : item.status === "in_progress" ? "tl-icon-muted" : "tl-icon-info";
+      return `
+        <div class="tl-item">
+          <div class="tl-icon ${mcpCls}">${icons.wrench}</div>
+          <div class="tl-body">
+            <div class="tl-label">
+              ${escapeHtml(item.server || "mcp")}<span class="tl-dot">.</span>${escapeHtml(item.tool || "?")}
+              ${item.status ? `<span class="tl-badge">${escapeHtml(item.status)}</span>` : ""}
+            </div>
+            ${item.arguments ? `
+              <details class="tl-details">
+                <summary>Arguments</summary>
+                <pre class="tl-output">${escapeHtml(typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments, null, 2))}</pre>
+              </details>` : ""}
+            ${item.result ? `
+              <details class="tl-details">
+                <summary>Result</summary>
+                <pre class="tl-output">${escapeHtml(typeof item.result === "string" ? item.result : JSON.stringify(item.result, null, 2))}</pre>
+              </details>` : ""}
+            ${item.error ? `<div class="tl-error-msg">${escapeHtml(item.error.message || JSON.stringify(item.error))}</div>` : ""}
+          </div>
+        </div>`;
+    }
+
+    case "web_search":
+      return `
+        <div class="tl-item">
+          <div class="tl-icon tl-icon-info">${icons.search}</div>
+          <div class="tl-body">
+            <div class="tl-label">Web Search</div>
+            <div class="tl-query">${escapeHtml(item.query || "")}</div>
+          </div>
+        </div>`;
+
+    case "error":
+      return `
+        <div class="tl-item">
+          <div class="tl-icon tl-icon-danger">${icons.alert}</div>
+          <div class="tl-body">
+            <div class="tl-label">Error</div>
+            <div class="tl-error-msg">${escapeHtml(item.message || "")}</div>
+          </div>
+        </div>`;
+
+    default:
+      return `
+        <div class="tl-item">
+          <div class="tl-icon tl-icon-muted">${icons.dot}</div>
+          <div class="tl-body">
+            <div class="tl-label">${escapeHtml(item.type || "unknown")}</div>
+            <pre class="tl-output">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+          </div>
+        </div>`;
+  }
 }
 
 async function fetchJson(url, options = {}) {
@@ -118,6 +292,303 @@ function normalizeMode(value) {
 function formatModeLabel(value) {
   const mode = normalizeMode(value);
   return mode.charAt(0).toUpperCase() + mode.slice(1);
+}
+
+function hasCodexModelAccess() {
+  const env = state.config?.codexEnvironment;
+  return Boolean(env?.hasOpenAIApiKey || env?.hasCodexProfile);
+}
+
+function getDefaultCatalogModel() {
+  return state.modelCatalog.models.find((model) => model.isDefault) || null;
+}
+
+function findCatalogModelByValue(value) {
+  const targetValue = String(value ?? "").trim();
+  if (!targetValue) {
+    return null;
+  }
+
+  return state.modelCatalog.models.find((model) => model.model === targetValue) || null;
+}
+
+function getResolvedModelSelection() {
+  const currentValue = el.model.value.trim();
+  if (!currentValue) {
+    return getDefaultCatalogModel();
+  }
+
+  return findCatalogModelByValue(currentValue);
+}
+
+function getDefaultModelPlaceholder() {
+  const defaultModel = getDefaultCatalogModel();
+  return defaultModel ? `Codex default (${defaultModel.model})` : "Codex default";
+}
+
+function formatReasoningEffortLabel(value) {
+  if (value === "xhigh") {
+    return "XHigh";
+  }
+
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : "Default";
+}
+
+function getModelMenuQuery() {
+  const currentValue = el.model.value.trim();
+  if (!currentValue || findCatalogModelByValue(currentValue)) {
+    return "";
+  }
+
+  return currentValue.toLowerCase();
+}
+
+function getVisibleCatalogModels() {
+  const query = getModelMenuQuery();
+  const visibleModels = state.modelCatalog.models.filter((model) => !model.hidden);
+
+  if (!query) {
+    return visibleModels;
+  }
+
+  return visibleModels.filter((model) => {
+    const haystack = [model.displayName, model.model, model.description]
+      .filter(Boolean)
+      .join("\n")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function syncReasoningEffortOptions() {
+  const selectedModel = getResolvedModelSelection();
+  const supported = selectedModel
+    ? new Set(
+        (selectedModel.supportedReasoningEfforts || [])
+          .map((entry) => entry.reasoningEffort)
+          .filter((value) => value && value !== "none"),
+      )
+    : null;
+  const defaultEffort = selectedModel?.defaultReasoningEffort;
+
+  el.reasoningEffort.options[0].textContent = defaultEffort && defaultEffort !== "none"
+    ? `Default (${formatReasoningEffortLabel(defaultEffort)})`
+    : "Default";
+
+  for (const option of el.reasoningEffort.options) {
+    if (!option.value) {
+      option.disabled = false;
+      continue;
+    }
+
+    option.disabled = supported ? !supported.has(option.value) : false;
+  }
+
+  if (supported && el.reasoningEffort.value && !supported.has(el.reasoningEffort.value)) {
+    el.reasoningEffort.value = "";
+  }
+}
+
+function getModelStatusState() {
+  const modelCount = state.modelCatalog.models.length;
+
+  if (state.modelCatalog.loading) {
+    return {
+      tone: "is-loading",
+      text: "Loading models from Codex…",
+    };
+  }
+
+  if (!hasCodexModelAccess()) {
+    return {
+      tone: "",
+      text: "No Codex auth detected. You can still type a model id manually.",
+    };
+  }
+
+  if (state.modelCatalog.error && modelCount === 0) {
+    return {
+      tone: "is-error",
+      text: `${state.modelCatalog.error} Type a model id manually instead.`,
+    };
+  }
+
+  if (state.modelCatalog.stale && modelCount > 0) {
+    const staleAge = state.modelCatalog.fetchedAt ? formatRelative(state.modelCatalog.fetchedAt) : "earlier";
+    return {
+      tone: "is-warning",
+      text: `Showing ${modelCount} cached model${modelCount === 1 ? "" : "s"} from ${staleAge}.`,
+    };
+  }
+
+  if (state.modelCatalog.loaded) {
+    if (modelCount === 0) {
+      return {
+        tone: "is-warning",
+        text: "Codex returned no visible models. You can still type a model id manually.",
+      };
+    }
+
+    const defaultModel = getDefaultCatalogModel();
+    return {
+      tone: "is-success",
+      text: defaultModel
+        ? `Loaded ${modelCount} model${modelCount === 1 ? "" : "s"} from Codex. Default is ${defaultModel.model}.`
+        : `Loaded ${modelCount} model${modelCount === 1 ? "" : "s"} from Codex.`,
+    };
+  }
+
+  return {
+    tone: "",
+    text: "Type a model id manually or open the picker to load the Codex model list.",
+  };
+}
+
+function renderModelMenu() {
+  if (!state.modelMenuOpen) {
+    el.modelMenu.hidden = true;
+    el.modelMenu.innerHTML = "";
+    return;
+  }
+
+  const currentValue = el.model.value.trim();
+  const defaultModel = getDefaultCatalogModel();
+  const visibleModels = getVisibleCatalogModels();
+
+  if (state.modelCatalog.loading && state.modelCatalog.models.length === 0) {
+    el.modelMenu.innerHTML = `<div class="model-combobox-empty">Loading models from Codex…</div>`;
+    el.modelMenu.hidden = false;
+    return;
+  }
+
+  if (!hasCodexModelAccess() && state.modelCatalog.models.length === 0) {
+    el.modelMenu.innerHTML = `
+      <div class="model-combobox-empty">
+        No Codex credentials detected for live model discovery. You can still type any model id manually.
+      </div>
+    `;
+    el.modelMenu.hidden = false;
+    return;
+  }
+
+  if (state.modelCatalog.error && state.modelCatalog.models.length === 0) {
+    el.modelMenu.innerHTML = `<div class="model-combobox-empty">${escapeHtml(state.modelCatalog.error)}</div>`;
+    el.modelMenu.hidden = false;
+    return;
+  }
+
+  const defaultTitle = defaultModel ? `Codex default (${defaultModel.model})` : "Codex default";
+  const defaultDescription = defaultModel
+    ? defaultModel.defaultReasoningEffort && defaultModel.defaultReasoningEffort !== "none"
+      ? `Use Codex's current default model. Default reasoning is ${formatReasoningEffortLabel(defaultModel.defaultReasoningEffort)}.`
+      : "Use Codex's current default model."
+    : "Use Codex's current default model.";
+
+  const optionsMarkup = [
+    `
+      <button class="model-option${currentValue ? "" : " is-selected"}" type="button" data-model-value="">
+        <span class="model-option-title-row">
+          <span class="model-option-title">${escapeHtml(defaultTitle)}</span>
+          <span class="model-option-badge">Auto</span>
+        </span>
+        <span class="model-option-desc">${escapeHtml(defaultDescription)}</span>
+      </button>
+    `,
+  ];
+
+  if (visibleModels.length === 0) {
+    optionsMarkup.push(`
+      <div class="model-combobox-empty">
+        No matching live models. You can still type any model id manually.
+      </div>
+    `);
+  } else {
+    optionsMarkup.push(...visibleModels.map((model) => `
+      <button class="model-option${model.model === currentValue ? " is-selected" : ""}" type="button" data-model-value="${escapeHtml(model.model)}">
+        <span class="model-option-title-row">
+          <span class="model-option-title">${escapeHtml(model.displayName || model.model)}</span>
+          ${model.isDefault ? `<span class="model-option-badge">Default</span>` : ""}
+        </span>
+        <span class="model-option-model">${escapeHtml(model.model)}</span>
+        ${model.description ? `<span class="model-option-desc">${escapeHtml(model.description)}</span>` : ""}
+      </button>
+    `));
+  }
+
+  el.modelMenu.innerHTML = optionsMarkup.join("");
+  el.modelMenu.hidden = false;
+}
+
+function renderModelPicker() {
+  syncReasoningEffortOptions();
+
+  const status = getModelStatusState();
+  el.model.placeholder = getDefaultModelPlaceholder();
+  el.modelStatus.className = `form-hint model-combobox-status${status.tone ? ` ${status.tone}` : ""}`;
+  el.modelStatus.textContent = status.text;
+  el.modelStatus.title = state.modelCatalog.fetchedAt ? formatDate(state.modelCatalog.fetchedAt) : "";
+
+  el.modelMenuButton.classList.toggle("is-open", state.modelMenuOpen);
+  el.modelMenuButton.setAttribute("aria-expanded", state.modelMenuOpen ? "true" : "false");
+
+  el.refreshModelsButton.disabled = !hasCodexModelAccess() || state.modelCatalog.loading;
+  el.refreshModelsButton.title = !hasCodexModelAccess()
+    ? "Live model discovery needs Codex auth"
+    : state.modelCatalog.loading
+      ? "Loading models from Codex"
+      : "Refresh models";
+
+  renderModelMenu();
+}
+
+function setModelValue(value) {
+  el.model.value = String(value ?? "");
+  state.modelMenuOpen = false;
+  renderModelPicker();
+}
+
+async function ensureModelCatalogLoaded({ refresh = false } = {}) {
+  if (!hasCodexModelAccess()) {
+    renderModelPicker();
+    return null;
+  }
+
+  if (!refresh && state.modelCatalog.loaded) {
+    renderModelPicker();
+    return state.modelCatalog.models;
+  }
+
+  if (state.modelCatalog.request) {
+    return state.modelCatalog.request;
+  }
+
+  state.modelCatalog.loading = true;
+  state.modelCatalog.error = "";
+  renderModelPicker();
+
+  const request = (async () => {
+    try {
+      const payload = await fetchJson(refresh ? "/api/models?refresh=1" : "/api/models");
+      state.modelCatalog.models = Array.isArray(payload.models) ? payload.models.filter((model) => !model.hidden) : [];
+      state.modelCatalog.fetchedAt = payload.fetchedAt || null;
+      state.modelCatalog.stale = Boolean(payload.stale);
+      state.modelCatalog.loaded = true;
+      state.modelCatalog.error = "";
+      return state.modelCatalog.models;
+    } catch (error) {
+      state.modelCatalog.error = error.message;
+      throw error;
+    } finally {
+      if (state.modelCatalog.request === request) {
+        state.modelCatalog.request = null;
+      }
+      state.modelCatalog.loading = false;
+      renderModelPicker();
+    }
+  })();
+
+  state.modelCatalog.request = request;
+  return request;
 }
 
 function deriveParentPath(targetPath) {
@@ -220,13 +691,19 @@ function openDrawer() {
   el.drawer.classList.add("is-open");
   el.drawerOverlay.classList.add("is-open");
   document.body.style.overflow = "hidden";
+  renderModelPicker();
+  if (hasCodexModelAccess() && !state.modelCatalog.loaded && !state.modelCatalog.loading) {
+    void ensureModelCatalogLoaded();
+  }
 }
 
 function closeDrawer() {
   state.drawerOpen = false;
+  state.modelMenuOpen = false;
   el.drawer.classList.remove("is-open");
   el.drawerOverlay.classList.remove("is-open");
   document.body.style.overflow = "";
+  renderModelPicker();
 }
 
 /* ─── Mode ─── */
@@ -554,7 +1031,9 @@ function renderAgentDetailTabs(agent) {
 
   const responsePanel = `
     <div class="tab-panel${activeTab === "response" ? " is-active" : ""}" data-tab="response">
-      <pre class="response-block">${escapeHtml(agent.finalResponse || "No final response captured yet.")}</pre>
+      ${agent.finalResponse
+        ? `<div class="markdown-body">${renderMarkdown(agent.finalResponse)}</div>`
+        : `<div class="text-muted text-sm">No final response captured yet.</div>`}
     </div>
   `;
 
@@ -591,12 +1070,9 @@ function renderAgentDetailTabs(agent) {
 
   const historyPanel = `
     <div class="tab-panel${activeTab === "history" ? " is-active" : ""}" data-tab="history">
-      ${agent.items.length ? agent.items.map((item) => `
-        <div class="review-section">
-          <div class="review-section-title">${escapeHtml(item.type)}</div>
-          <pre class="code-block">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
-        </div>
-      `).join("") : `<div class="text-muted text-sm">No streamed history recorded yet.</div>`}
+      ${agent.items.length
+        ? `<div class="timeline">${agent.items.map(renderHistoryItem).join("")}</div>`
+        : `<div class="text-muted text-sm">No streamed history recorded yet.</div>`}
     </div>
   `;
 
@@ -762,16 +1238,18 @@ function resetForm() {
   el.runForm.reset();
   el.runCount.value = state.config?.defaults.runCount ?? 10;
   el.concurrency.value = state.config?.defaults.runCount ?? 10;
-  $("#sandboxMode").value = state.config?.defaults.sandboxMode ?? "workspace-write";
-  $("#approvalPolicy").value = state.config?.defaults.approvalPolicy ?? "never";
+  el.sandboxMode.value = state.config?.defaults.sandboxMode ?? "workspace-write";
+  el.approvalPolicy.value = state.config?.defaults.approvalPolicy ?? "never";
   el.taskPrompt.value = "";
   el.prompt.value = "";
   state.projectInspect = null;
   state.autoWorktreeRoot = null;
+  state.modelMenuOpen = false;
   el.projectInspectStatus.textContent = "";
   setMode("repeated");
   syncConcurrencyField();
   renderProjectInspect();
+  renderModelPicker();
   updateSubmitButtonState();
 }
 
@@ -903,13 +1381,13 @@ async function submitRun(event) {
       concurrency: Number(el.concurrency.value),
       prompt: el.prompt.value.trim(),
       taskPrompt: el.taskPrompt.value.trim(),
-      baseRef: $("#baseRef").value.trim(),
-      model: $("#model").value.trim(),
-      reasoningEffort: $("#reasoningEffort").value,
-      sandboxMode: $("#sandboxMode").value,
-      approvalPolicy: $("#approvalPolicy").value,
-      networkAccessEnabled: $("#networkAccessEnabled").checked,
-      webSearchMode: $("#webSearchMode").checked ? "live" : "disabled",
+      baseRef: el.baseRef.value.trim(),
+      model: el.model.value.trim(),
+      reasoningEffort: el.reasoningEffort.value,
+      sandboxMode: el.sandboxMode.value,
+      approvalPolicy: el.approvalPolicy.value,
+      networkAccessEnabled: el.networkAccessEnabled.checked,
+      webSearchMode: el.webSearchMode.checked ? "live" : "disabled",
     };
 
     const response = await fetchJson("/api/runs", {
@@ -1035,6 +1513,48 @@ function bindEvents() {
 
   el.prompt.addEventListener("input", updateSubmitButtonState);
   el.taskPrompt.addEventListener("input", updateSubmitButtonState);
+  el.model.addEventListener("focus", () => {
+    if (!state.modelCatalog.loaded && !state.modelCatalog.loading) {
+      return;
+    }
+
+    state.modelMenuOpen = true;
+    renderModelPicker();
+  });
+  el.model.addEventListener("input", () => {
+    if (hasCodexModelAccess() || state.modelCatalog.loaded || state.modelCatalog.loading) {
+      state.modelMenuOpen = true;
+    }
+    renderModelPicker();
+  });
+  el.modelMenuButton.addEventListener("click", () => {
+    state.modelMenuOpen = !state.modelMenuOpen;
+    renderModelPicker();
+    if (state.modelMenuOpen && hasCodexModelAccess() && !state.modelCatalog.loaded && !state.modelCatalog.loading) {
+      void ensureModelCatalogLoaded();
+    }
+  });
+  el.refreshModelsButton.addEventListener("click", async () => {
+    state.modelMenuOpen = true;
+    renderModelPicker();
+    try {
+      await ensureModelCatalogLoaded({ refresh: true });
+    } catch {
+      // The status line already explains the fallback.
+    }
+  });
+  el.modelMenu.addEventListener("mousedown", (event) => {
+    if (event.target.closest("[data-model-value]")) {
+      event.preventDefault();
+    }
+  });
+  el.modelMenu.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-model-value]");
+    if (!option) return;
+
+    setModelValue(option.dataset.modelValue || "");
+    el.model.focus();
+  });
 
   el.runForm.addEventListener("submit", submitRun);
   el.resetFormButton.addEventListener("click", resetForm);
@@ -1121,7 +1641,20 @@ function bindEvents() {
     el.browserDialog.close();
   });
 
+  document.addEventListener("click", (event) => {
+    if (!state.modelMenuOpen) return;
+    if (el.modelCombobox.contains(event.target)) return;
+    state.modelMenuOpen = false;
+    renderModelPicker();
+  });
+
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.modelMenuOpen) {
+      state.modelMenuOpen = false;
+      renderModelPicker();
+      return;
+    }
+
     if (event.key === "Escape" && state.drawerOpen) closeDrawer();
   });
 }

@@ -157,15 +157,29 @@
           </div>
           <div class="form-section">
             <label class="form-label" for="model">Model</label>
-            <input id="model" name="model" placeholder="Codex default" />
+            <div class="model-combobox" id="modelCombobox">
+              <div class="model-combobox-row">
+                <input id="model" name="model" placeholder="Codex default" autocomplete="off" spellcheck="false" />
+                <button class="btn-icon model-combobox-action" id="refreshModelsButton" type="button" aria-label="Refresh models" title="Refresh models">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                </button>
+                <button class="btn-icon model-combobox-action model-combobox-toggle" id="modelMenuButton" type="button" aria-label="Show models" aria-expanded="false" title="Show models">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+              </div>
+              <div class="form-hint model-combobox-status" id="modelStatus">Type a model id manually or load the Codex model list.</div>
+              <div class="model-combobox-menu" id="modelMenu" hidden></div>
+            </div>
           </div>
           <div class="form-section">
             <label class="form-label" for="reasoningEffort">Reasoning Effort</label>
             <select id="reasoningEffort" name="reasoningEffort">
               <option value="">Default</option>
+              <option value="minimal">Minimal</option>
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+              <option value="xhigh">XHigh</option>
             </select>
           </div>
           <div class="form-section">
@@ -234,6 +248,8 @@
     <!-- Toast Container -->
     <div class="toast-container" id="toastContainer"></div>
 
+    <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

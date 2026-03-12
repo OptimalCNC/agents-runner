@@ -6,7 +6,8 @@
   "description": "Web UI for running multiple Codex SDK run modes concurrently across git worktrees.",
   "scripts": {
     "start": "bun src/server.js",
-    "dev": "bun --watch src/server.js"
+    "dev": "bun --watch src/server.js",
+    "test": "bun test"
   },
   "engines": {
     "bun": ">=1.0.0"
