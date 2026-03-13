@@ -1,6 +1,6 @@
 import { useRef, useEffect } from "preact/hooks";
-import { modelCatalog, modelMenuOpen, config } from "../state/store.js";
-import { apiLoadModels } from "../state/api.js";
+import { modelCatalog, modelMenuOpen } from "../state/store.js";
+import { ensureModelCatalogLoaded, hasCodexModelAccess } from "../state/modelCatalog.js";
 import { RefreshIcon, ChevronDownIcon } from "../icons.js";
 import { formatRelative, formatDate, formatReasoningEffortLabel } from "../utils/format.js";
 
@@ -8,11 +8,6 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   onReasoningEffortChange?: (model: string | null) => void;
-}
-
-function hasCodexModelAccess() {
-  const env = config.value?.codexEnvironment;
-  return Boolean(env?.hasOpenAIApiKey || env?.hasCodexProfile);
 }
 
 function getDefaultCatalogModel() {
@@ -23,31 +18,6 @@ function findCatalogModelByValue(value: string) {
   const target = String(value ?? "").trim();
   if (!target) return null;
   return modelCatalog.value.models.find((m) => m.model === target) ?? null;
-}
-
-async function ensureModelCatalogLoaded(refresh = false) {
-  if (!hasCodexModelAccess()) return;
-  if (!refresh && modelCatalog.value.loaded) return;
-  if (modelCatalog.value.loading) return;
-
-  modelCatalog.value = { ...modelCatalog.value, loading: true, error: "" };
-  try {
-    const payload = await apiLoadModels(refresh);
-    modelCatalog.value = {
-      loading: false,
-      loaded: true,
-      stale: Boolean(payload.stale),
-      fetchedAt: payload.fetchedAt || null,
-      models: Array.isArray(payload.models) ? payload.models.filter((m) => !m.hidden) : [],
-      error: "",
-    };
-  } catch (err) {
-    modelCatalog.value = {
-      ...modelCatalog.value,
-      loading: false,
-      error: (err as Error).message,
-    };
-  }
 }
 
 export function ModelPicker({ value, onChange, onReasoningEffortChange }: Props) {

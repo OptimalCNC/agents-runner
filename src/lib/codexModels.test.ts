@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { createCodexModelCatalog, fetchCodexModels } from "./codexModels";
+import { createCodexModelCatalog, fetchCodexModels, validateCodexAuth } from "./codexModels";
 
 import type { CodexModel, CodexAppServerClient } from "../types";
 
@@ -165,6 +165,74 @@ test("fetchCodexModels paginates until Codex stops returning a cursor", async ()
     buildExpectedModel({ model: "gpt-5.3-codex", displayName: "gpt-5.3-codex", isDefault: true }),
     buildExpectedModel({ model: "gpt-5.4", displayName: "gpt-5.4" }),
   ]);
+});
+
+test("validateCodexAuth initializes Codex and requests a single model page", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  let closed = 0;
+
+  await validateCodexAuth({
+    clientFactory: async (): Promise<CodexAppServerClient> => ({
+      async request(method: string, params: Record<string, unknown> = {}) {
+        calls.push({ method, params });
+
+        if (method === "initialize") {
+          return { userAgent: "codex/test" };
+        }
+
+        if (method === "model/list") {
+          return { data: [], nextCursor: "unused" };
+        }
+
+        throw new Error(`Unexpected method: ${method}`);
+      },
+      async close() {
+        closed += 1;
+      },
+    }),
+  });
+
+  expect(calls).toEqual([
+    {
+      method: "initialize",
+      params: {
+        clientInfo: {
+          name: "agents-runner",
+          version: "0.1.0",
+        },
+      },
+    },
+    { method: "model/list", params: {} },
+  ]);
+  expect(closed).toBe(1);
+});
+
+test("validateCodexAuth closes the client and surfaces validation failures", async () => {
+  let closed = 0;
+
+  let thrown: Error | null = null;
+  try {
+    await validateCodexAuth({
+      clientFactory: async (): Promise<CodexAppServerClient> => ({
+        async request(method: string) {
+          if (method === "initialize") {
+            return { userAgent: "codex/test" };
+          }
+
+          throw new Error("auth expired");
+        },
+        async close() {
+          closed += 1;
+        },
+      }),
+    });
+  } catch (error) {
+    thrown = error as Error;
+  }
+
+  expect(closed).toBe(1);
+  expect(thrown).toBeInstanceOf(Error);
+  expect(thrown!.message).toBe("auth expired");
 });
 
 test("createCodexModelCatalog returns stale cached models when a refresh fails", async () => {

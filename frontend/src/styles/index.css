@@ -175,7 +175,30 @@ button { cursor: pointer; }
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
 }
+.runtime-badge.is-checking {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+.runtime-badge.is-valid {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(34, 197, 94, 0.28);
+}
+.runtime-badge.is-invalid {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(239, 68, 68, 0.28);
+}
+.runtime-badge.is-checking svg {
+  animation: runtime-badge-pulse 1.2s ease-in-out infinite;
+}
 @media (min-width: 960px) { .runtime-badge { display: flex; } }
+
+@keyframes runtime-badge-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
 
 /* ───────────────────── Buttons ───────────────────── */
 .btn {

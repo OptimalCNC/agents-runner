@@ -20,7 +20,7 @@ export function formatRelative(value: string | null | undefined): string {
 }
 
 export function formatStatus(value: string | null | undefined): string {
-  return (value ?? "").replaceAll("-", " ");
+  return (value ?? "").replace(/-/g, " ");
 }
 
 export function normalizeMode(value: string | null | undefined): "repeated" | "generated" {

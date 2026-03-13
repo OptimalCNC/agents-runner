@@ -1,22 +1,18 @@
-import { connectionStatus, config, drawerOpen, modelCatalog } from "../state/store.js";
+import { connectionStatus, drawerOpen } from "../state/store.js";
+import { codexAuth } from "../state/codexAuth.js";
 import { PlusIcon } from "../icons.js";
 
 function getRuntimeText() {
-  const cfg = config.value;
-  if (!cfg) return "Checking\u2026";
-  const env = cfg.codexEnvironment;
-  if (env.hasOpenAIApiKey) return "API key detected";
-  if (env.hasCodexProfile) return "Codex auth";
-  return "No auth";
+  return "Codex auth";
 }
 
 function getRuntimeTitle() {
-  const cfg = config.value;
-  if (!cfg) return "Loading runtime info\u2026";
-  const env = cfg.codexEnvironment;
-  if (env.hasOpenAIApiKey) return "OPENAI_API_KEY or CODEX_API_KEY is set";
-  if (env.hasCodexProfile) return "Using ~/.codex/auth.json";
-  return "No API key or Codex auth profile found";
+  const auth = codexAuth.value;
+  return auth.message;
+}
+
+function getRuntimeBadgeClass() {
+  return `runtime-badge is-${codexAuth.value.status}`;
 }
 
 export function Navbar() {
@@ -50,7 +46,7 @@ export function Navbar() {
           <span class={connDotClass} />
           <span class="conn-label">{connLabel}</span>
         </div>
-        <div class="runtime-badge" title={getRuntimeTitle()}>
+        <div class={getRuntimeBadgeClass()} title={getRuntimeTitle()}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />
           </svg>

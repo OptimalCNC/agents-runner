@@ -6,12 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createCodexModelCatalog } from "./lib/codexModels";
+import { createCodexModelCatalog, validateCodexAuth } from "./lib/codexModels";
 import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git";
 import { createBatchStore } from "./lib/batchStore";
 import { cancelBatch, deleteBatch, generateBatchTitle, executeBatch, previewBatchDelete } from "./lib/runner";
 
-import type { BatchMode } from "./types";
+import type { BatchMode, CodexAuthValidationResponse, CodexCredentialSource } from "./types";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -83,6 +83,14 @@ async function hasCodexProfile(): Promise<boolean> {
 
 async function hasCodexCredentials(): Promise<boolean> {
   return Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || await hasCodexProfile());
+}
+
+async function getCodexCredentialSource(): Promise<CodexCredentialSource> {
+  if (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) {
+    return "apiKey";
+  }
+
+  return await hasCodexProfile() ? "profile" : "none";
 }
 
 function normalizeInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
@@ -245,6 +253,36 @@ async function handleApi(request: IncomingMessage, response: ServerResponse, url
 
   if (request.method === "GET" && url.pathname === "/api/batches") {
     sendJson(response, 200, { batches: store.listSummaries() });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/auth/validate") {
+    const source = await getCodexCredentialSource();
+    const checkedAt = new Date().toISOString();
+
+    try {
+      await validateCodexAuth();
+
+      const payload: CodexAuthValidationResponse = {
+        status: "valid",
+        checkedAt,
+        source,
+        message: source === "apiKey"
+          ? "Codex authentication validated with OPENAI_API_KEY or CODEX_API_KEY."
+          : source === "profile"
+          ? "Codex authentication validated with ~/.codex/auth.json."
+          : "Codex authentication validated.",
+      };
+      sendJson(response, 200, payload);
+    } catch (error) {
+      const payload: CodexAuthValidationResponse = {
+        status: "invalid",
+        checkedAt,
+        source,
+        message: (error as Error).message || "Codex authentication validation failed.",
+      };
+      sendJson(response, 200, payload);
+    }
     return;
   }
 

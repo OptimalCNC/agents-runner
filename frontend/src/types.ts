@@ -234,6 +234,17 @@ export interface ModelCatalogResponse {
   stale: boolean;
 }
 
+export type CodexCredentialSource = "apiKey" | "profile" | "none";
+
+export type CodexAuthValidationStatus = "checking" | "valid" | "invalid";
+
+export interface CodexAuthValidationResponse {
+  status: Exclude<CodexAuthValidationStatus, "checking">;
+  checkedAt: string;
+  source: CodexCredentialSource;
+  message: string;
+}
+
 export interface WorktreeInspection {
   worktreePath: string;
   exists: boolean;

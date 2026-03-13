@@ -1,4 +1,13 @@
-import type { AppConfig, Batch, BatchSummary, DirectoryListing, ModelCatalogResponse, ProjectContext, RunReview } from "../types.js";
+import type {
+  AppConfig,
+  Batch,
+  BatchSummary,
+  CodexAuthValidationResponse,
+  DirectoryListing,
+  ModelCatalogResponse,
+  ProjectContext,
+  RunReview,
+} from "../types.js";
 
 export class ApiError extends Error {
   status: number;
@@ -58,6 +67,10 @@ export async function apiBrowseFs(path: string): Promise<DirectoryListing> {
 
 export async function apiLoadModels(refresh = false): Promise<ModelCatalogResponse> {
   return fetchJson<ModelCatalogResponse>(refresh ? "/api/models?refresh=1" : "/api/models");
+}
+
+export async function apiValidateCodexAuth(): Promise<CodexAuthValidationResponse> {
+  return fetchJson<CodexAuthValidationResponse>("/api/auth/validate");
 }
 
 export async function apiCancelBatch(batchId: string): Promise<void> {

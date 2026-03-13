@@ -96,24 +96,23 @@ export interface FetchCodexModelsOptions {
   clientFactory?: () => Promise<CodexAppServerClient>;
 }
 
+export interface ValidateCodexAuthOptions {
+  clientFactory?: () => Promise<CodexAppServerClient>;
+}
+
 export async function fetchCodexModels({
   clientFactory = () => Promise.resolve(createCodexAppServerClient()),
 }: FetchCodexModelsOptions = {}): Promise<CodexModel[]> {
   const client = await clientFactory();
 
   try {
-    await client.request("initialize", {
-      clientInfo: {
-        name: "agents-runner",
-        version: "0.1.0",
-      },
-    });
+    await initializeCodexClient(client);
 
     const models: CodexModel[] = [];
     let cursor: string | null = null;
 
     do {
-      const response = await client.request("model/list", cursor ? { cursor } : {}) as Record<string, unknown>;
+      const response = await requestModelListPage(client, cursor);
       const page = Array.isArray(response?.data) ? response.data : [];
 
       for (const model of page) {
@@ -131,6 +130,21 @@ export async function fetchCodexModels({
     return models;
   } catch (error) {
     throw wrapModelLoadError(error);
+  } finally {
+    await client.close();
+  }
+}
+
+export async function validateCodexAuth({
+  clientFactory = () => Promise.resolve(createCodexAppServerClient()),
+}: ValidateCodexAuthOptions = {}): Promise<void> {
+  const client = await clientFactory();
+
+  try {
+    await initializeCodexClient(client);
+    await requestModelListPage(client);
+  } catch (error) {
+    throw normalizeError(error);
   } finally {
     await client.close();
   }
@@ -575,6 +589,22 @@ function buildCatalogResponse(cacheEntry: CacheEntry, stale: boolean): ModelCata
     fetchedAt: cacheEntry.fetchedAt,
     stale,
   };
+}
+
+async function initializeCodexClient(client: CodexAppServerClient): Promise<void> {
+  await client.request("initialize", {
+    clientInfo: {
+      name: "agents-runner",
+      version: "0.1.0",
+    },
+  });
+}
+
+async function requestModelListPage(
+  client: CodexAppServerClient,
+  cursor?: string | null,
+): Promise<Record<string, unknown>> {
+  return await client.request("model/list", cursor ? { cursor } : {}) as Record<string, unknown>;
 }
 
 function normalizeModel(rawModel: Record<string, unknown>): CodexModel {

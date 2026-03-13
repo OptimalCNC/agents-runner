@@ -12,6 +12,7 @@ import {
   selectedBatchId,
   batchDetails,
 } from "./state/store.js";
+import { refreshCodexAuthValidation } from "./state/codexAuth.js";
 import { apiLoadBatch } from "./state/api.js";
 import "./styles/index.css";
 
@@ -19,6 +20,7 @@ async function init() {
   // Load config
   const cfgData = await apiLoadConfig();
   config.value = cfgData;
+  void refreshCodexAuthValidation();
 
   // Load batches list
   const batchData = await apiLoadBatches();
