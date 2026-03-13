@@ -14,7 +14,6 @@ export interface BatchConfig {
   baseRef: string;
   model: string;
   sandboxMode: string;
-  approvalPolicy: string;
   networkAccessEnabled: boolean;
   webSearchMode: string;
   reasoningEffort: string;
@@ -263,7 +262,6 @@ export interface AppConfig {
   defaults: {
     runCount: number;
     sandboxMode: string;
-    approvalPolicy: string;
   };
   codexEnvironment: {
     hasOpenAIApiKey: boolean;

@@ -29,6 +29,7 @@ const MAX_TEXT_LENGTH = 24_000;
 const WORKTREE_REMOVE_RETRY_DELAY_MS = 500;
 const WORKTREE_REMOVE_RETRY_ATTEMPTS = 6;
 const BATCH_SETTLE_TIMEOUT_MS = 5_000;
+const NON_INTERACTIVE_APPROVAL_POLICY = "never" as const;
 
 interface ExecutionState {
   titleController: AbortController | null;
@@ -474,7 +475,7 @@ async function generateTasks(store: BatchStore, batchId: string, projectContext:
     const thread = codex.startThread({
       model: batch.config.model || undefined,
       sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
-      approvalPolicy: batch.config.approvalPolicy as "never" | "on-request" | "on-failure" | "untrusted",
+      approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
       workingDirectory: projectContext.projectPath,
       networkAccessEnabled: batch.config.networkAccessEnabled,
       webSearchEnabled: batch.config.webSearchMode !== "disabled",
@@ -536,7 +537,7 @@ export async function generateBatchTitle(store: BatchStore, batchId: string): Pr
   const thread = codex.startThread({
     model: batch.config.model || undefined,
     sandboxMode: "read-only",
-    approvalPolicy: "never",
+    approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
     workingDirectory: batch.config.projectPath,
     networkAccessEnabled: false,
     webSearchEnabled: false,
@@ -613,7 +614,7 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
     const thread = codex.startThread({
       model: batch.config.model || undefined,
       sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
-      approvalPolicy: batch.config.approvalPolicy as "never" | "on-request" | "on-failure" | "untrusted",
+      approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
       workingDirectory,
       networkAccessEnabled: batch.config.networkAccessEnabled,
       webSearchEnabled: batch.config.webSearchMode !== "disabled",

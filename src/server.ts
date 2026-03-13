@@ -139,7 +139,6 @@ interface NormalizedCreateBatchPayload {
     baseRef: string;
     model: string;
     sandboxMode: string;
-    approvalPolicy: string;
     networkAccessEnabled: boolean;
     webSearchMode: string;
     reasoningEffort: string;
@@ -187,7 +186,6 @@ function normalizeCreateBatchPayload(body: Record<string, unknown>): NormalizedC
       baseRef: normalizeString(body.baseRef),
       model: normalizeString(body.model),
       sandboxMode: normalizeString(body.sandboxMode) || "workspace-write",
-      approvalPolicy: normalizeString(body.approvalPolicy) || "never",
       networkAccessEnabled: Boolean(body.networkAccessEnabled),
       webSearchMode: body.webSearchMode === "live" ? "live" : "disabled",
       reasoningEffort: normalizeString(body.reasoningEffort) || "",
@@ -241,7 +239,6 @@ async function handleApi(request: IncomingMessage, response: ServerResponse, url
         port,
         runCount: 10,
         sandboxMode: "workspace-write",
-        approvalPolicy: "never",
       },
       codexEnvironment: {
         hasOpenAIApiKey: Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY),

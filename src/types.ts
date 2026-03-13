@@ -35,7 +35,6 @@ export interface BatchConfig {
   baseRef: string;
   model: string;
   sandboxMode: string;
-  approvalPolicy: string;
   networkAccessEnabled: boolean;
   webSearchMode: string;
   reasoningEffort: string;

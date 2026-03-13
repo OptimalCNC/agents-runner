@@ -60,7 +60,6 @@ export function NewBatchDrawer() {
   const [model, setModel] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [sandboxMode, setSandboxMode] = useState(cfg?.defaults?.sandboxMode ?? "workspace-write");
-  const [approvalPolicy, setApprovalPolicy] = useState(cfg?.defaults?.approvalPolicy ?? "never");
   const [networkAccess, setNetworkAccess] = useState(false);
   const [webSearch, setWebSearch] = useState(false);
   const [inspectStatus, setInspectStatus] = useState("");
@@ -86,7 +85,6 @@ export function NewBatchDrawer() {
     setModel("");
     setReasoningEffort("");
     setSandboxMode(c?.defaults?.sandboxMode ?? "workspace-write");
-    setApprovalPolicy(c?.defaults?.approvalPolicy ?? "never");
     setNetworkAccess(false);
     setWebSearch(false);
     setInspectStatus("");
@@ -198,7 +196,6 @@ export function NewBatchDrawer() {
         model: model.trim(),
         reasoningEffort,
         sandboxMode,
-        approvalPolicy,
         networkAccessEnabled: networkAccess,
         webSearchMode: webSearch ? "live" : "disabled",
       };
@@ -492,20 +489,6 @@ export function NewBatchDrawer() {
                 <option value="danger-full-access">danger-full-access</option>
               </select>
             </div>
-            <div class="form-section">
-              <label class="form-label" for="approvalPolicy">Approval Policy</label>
-              <select
-                id="approvalPolicy"
-                name="approvalPolicy"
-                value={approvalPolicy}
-                onChange={(e) => setApprovalPolicy((e.target as HTMLSelectElement).value)}
-              >
-                <option value="never">never</option>
-                <option value="on-request">on-request</option>
-                <option value="on-failure">on-failure</option>
-                <option value="untrusted">untrusted</option>
-              </select>
-            </div>
           </div>
 
           <div class="form-grid-2">
@@ -546,7 +529,6 @@ export function NewBatchDrawer() {
                 setModel("");
                 setReasoningEffort("");
                 setSandboxMode(c?.defaults?.sandboxMode ?? "workspace-write");
-                setApprovalPolicy(c?.defaults?.approvalPolicy ?? "never");
                 setNetworkAccess(false);
                 setWebSearch(false);
                 setInspectStatus("");
