@@ -334,7 +334,7 @@ button { cursor: pointer; }
   color: var(--accent);
 }
 
-.runs-list {
+.batches-list {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
@@ -347,7 +347,7 @@ button { cursor: pointer; }
 }
 
 /* ───────────────────── Run Cards (sidebar) ───────────────────── */
-.run-card {
+.batch-card {
   position: relative;
   padding: 12px;
   border-radius: var(--radius-md);
@@ -357,46 +357,46 @@ button { cursor: pointer; }
   margin-bottom: 4px;
 }
 
-.run-card:hover { background: var(--bg-hover); }
+.batch-card:hover { background: var(--bg-hover); }
 
-.run-card.is-selected {
+.batch-card.is-selected {
   background: var(--accent-muted);
   border-color: rgba(99, 102, 241, 0.25);
 }
 
-.run-card-actions {
+.batch-card-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-left: 8px;
 }
 
-.run-card-delete {
+.batch-card-delete {
   opacity: 0;
   color: var(--text-tertiary);
 }
 
-.run-card:hover .run-card-delete,
-.run-card.is-selected .run-card-delete,
-.run-card-delete:focus-visible {
+.batch-card:hover .batch-card-delete,
+.batch-card.is-selected .batch-card-delete,
+.batch-card-delete:focus-visible {
   opacity: 1;
 }
 
-.run-card-delete:hover {
+.batch-card-delete:hover {
   color: var(--danger);
   background: var(--danger-soft);
 }
 
-.run-card-top {
+.batch-card-top {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
 
-.run-card-info { flex: 1; min-width: 0; }
+.batch-card-info { flex: 1; min-width: 0; }
 
-.run-card-title {
+.batch-card-title {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
@@ -404,13 +404,13 @@ button { cursor: pointer; }
   text-overflow: ellipsis;
 }
 
-.run-card-meta {
+.batch-card-meta {
   font-size: 11px;
   color: var(--text-tertiary);
   margin-top: 2px;
 }
 
-.run-card-project {
+.batch-card-project {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -424,19 +424,19 @@ button { cursor: pointer; }
   color: var(--text-secondary);
 }
 
-.run-card-project svg {
+.batch-card-project svg {
   flex: none;
   color: var(--accent-hover);
 }
 
-.run-card-project span {
+.batch-card-project span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.run-card-progress {
+.batch-card-progress {
   margin-top: 8px;
 }
 
@@ -530,12 +530,12 @@ button { cursor: pointer; }
 }
 
 /* ───────────────────── Run Detail (main area) ───────────────────── */
-.run-detail {
+.batch-detail {
   padding: 24px;
   max-width: 1200px;
 }
 
-.run-detail-header {
+.batch-detail-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -543,14 +543,14 @@ button { cursor: pointer; }
   margin-bottom: 24px;
 }
 
-.run-detail-title-area h2 {
+.batch-detail-title-area h2 {
   font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.02em;
   margin-bottom: 4px;
 }
 
-.run-detail-meta {
+.batch-detail-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
@@ -558,13 +558,13 @@ button { cursor: pointer; }
   color: var(--text-tertiary);
 }
 
-.run-detail-meta .meta-item {
+.batch-detail-meta .meta-item {
   display: flex;
   align-items: center;
   gap: 5px;
 }
 
-.run-detail-actions {
+.batch-detail-actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -652,17 +652,17 @@ button { cursor: pointer; }
 }
 
 /* ───────────────────── Agents Grid ───────────────────── */
-.agents-section {
+.runs-section {
   margin-bottom: 24px;
 }
 
-.agents-grid {
+.runs-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 8px;
 }
 
-.agent-card {
+.run-card {
   padding: 12px;
   background: var(--bg-raised);
   border: 1px solid var(--border);
@@ -671,17 +671,17 @@ button { cursor: pointer; }
   transition: all 150ms var(--ease);
 }
 
-.agent-card:hover {
+.run-card:hover {
   border-color: var(--border-strong);
   background: var(--bg-elevated);
 }
 
-.agent-card.is-selected {
+.run-card.is-selected {
   border-color: rgba(99, 102, 241, 0.4);
   background: var(--accent-muted);
 }
 
-.agent-card-top {
+.run-card-top {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -689,7 +689,7 @@ button { cursor: pointer; }
   margin-bottom: 6px;
 }
 
-.agent-card-title {
+.run-card-title {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
@@ -698,12 +698,12 @@ button { cursor: pointer; }
   flex: 1;
 }
 
-.agent-card-meta {
+.run-card-meta {
   font-size: 11px;
   color: var(--text-tertiary);
 }
 
-.agent-card .tag-row {
+.run-card .tag-row {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -721,14 +721,14 @@ button { cursor: pointer; }
 }
 
 /* ───────────────────── Agent Detail (tabs) ───────────────────── */
-.agent-detail {
+.run-detail {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
-.agent-detail-header {
+.run-detail-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -736,12 +736,12 @@ button { cursor: pointer; }
   border-bottom: 1px solid var(--border);
 }
 
-.agent-detail-title {
+.run-detail-title {
   font-size: 14px;
   font-weight: 600;
 }
 
-.agent-detail-header-actions {
+.run-detail-header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1851,11 +1851,11 @@ select {
 
   .main-content { flex: 1; min-height: 0; }
 
-  .run-detail { padding: 16px; }
+  .batch-detail { padding: 16px; }
 
   .form-grid-2 { grid-template-columns: 1fr; }
 
-  .agents-grid { grid-template-columns: 1fr; }
+  .runs-grid { grid-template-columns: 1fr; }
 
   .info-cards { grid-template-columns: repeat(2, 1fr); }
 }

@@ -29,9 +29,9 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/></svg>
           <span id="runtimeText">Checking&hellip;</span>
         </div>
-        <button class="btn btn-primary" id="newRunButton" type="button">
+        <button class="btn btn-primary" id="newBatchButton" type="button">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          New Run
+          New Batch
         </button>
       </div>
     </nav>
@@ -40,21 +40,21 @@
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
           <div class="sidebar-title-row">
-            <h2>Runs</h2>
-            <span class="badge" id="runCountBadge">0</span>
+            <h2>Batches</h2>
+            <span class="badge" id="batchCountBadge">0</span>
           </div>
           <div class="sidebar-filter">
             <span>Projects</span>
             <div class="sidebar-filter-chips" id="projectFilters"></div>
           </div>
         </div>
-        <div class="runs-list" id="runsList">
+        <div class="batches-list" id="batchesList">
           <div class="empty-state">
             <div class="empty-icon">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
             </div>
-            <p class="empty-title">No runs yet</p>
-            <p class="empty-desc">Click "New Run" to get started</p>
+            <p class="empty-title">No batches yet</p>
+            <p class="empty-desc">Click "New Batch" to get started</p>
           </div>
         </div>
       </aside>
@@ -64,22 +64,22 @@
           <div class="empty-icon">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
           </div>
-          <p class="empty-title">No run selected</p>
-          <p class="empty-desc">Launch a run or select one from the sidebar to inspect agent output.</p>
+          <p class="empty-title">No batch selected</p>
+          <p class="empty-desc">Launch a batch or select one from the sidebar to inspect run output.</p>
         </div>
       </main>
     </div>
 
-    <!-- New Run Drawer -->
+    <!-- New Batch Drawer -->
     <div class="drawer-overlay" id="drawerOverlay"></div>
-    <aside class="drawer" id="newRunDrawer">
+    <aside class="drawer" id="newBatchDrawer">
       <div class="drawer-header">
-        <h2>New Run</h2>
+        <h2>New Batch</h2>
         <button class="btn-icon" id="closeDrawerButton" type="button" aria-label="Close drawer">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
-      <form id="runForm" class="drawer-body">
+      <form id="batchForm" class="drawer-body">
         <div class="form-section">
           <label class="form-label">Mode</label>
           <div class="segmented">
@@ -127,7 +127,7 @@
           <div class="form-section">
             <label class="form-label form-label-with-hint" for="concurrency">
               Concurrency
-              <span class="hint-icon" id="concurrencyHint" data-tooltip="Max agents running in parallel. Cannot exceed run count." aria-label="Concurrency help">
+              <span class="hint-icon" id="concurrencyHint" data-tooltip="Max runs executing in parallel. Cannot exceed run count." aria-label="Concurrency help">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
               </span>
             </label>
@@ -137,7 +137,7 @@
 
         <div class="form-section" id="promptGroup">
           <label class="form-label" for="prompt">Prompt</label>
-          <textarea id="prompt" name="prompt" rows="8" placeholder="Describe the task to repeat across all agents."></textarea>
+          <textarea id="prompt" name="prompt" rows="8" placeholder="Describe the task to repeat across all runs."></textarea>
         </div>
 
         <div class="form-section" id="taskPromptGroup" hidden>
@@ -218,7 +218,7 @@
           <button class="btn btn-ghost" id="resetFormButton" type="button">Reset</button>
           <button class="btn btn-primary" id="submitButton" type="submit">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            Start Run
+            Start Batch
           </button>
         </div>
       </form>

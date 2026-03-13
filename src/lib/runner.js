@@ -60,26 +60,26 @@ function sanitizeItem(item) {
   return clone;
 }
 
-function upsertItem(agent, item) {
+function upsertItem(run, item) {
   const nextItem = sanitizeItem(item);
-  const existingIndex = agent.items.findIndex((entry) => entry.id === nextItem.id);
+  const existingIndex = run.items.findIndex((entry) => entry.id === nextItem.id);
 
   if (existingIndex >= 0) {
-    agent.items[existingIndex] = nextItem;
+    run.items[existingIndex] = nextItem;
   } else {
-    agent.items.push(nextItem);
+    run.items.push(nextItem);
   }
 }
 
-function appendLog(agent, level, message) {
-  agent.logs.push({
+function appendLog(run, level, message) {
+  run.logs.push({
     at: nowIso(),
     level,
     message: truncateText(message, 1_200),
   });
 
-  if (agent.logs.length > MAX_LOG_ENTRIES) {
-    agent.logs.splice(0, agent.logs.length - MAX_LOG_ENTRIES);
+  if (run.logs.length > MAX_LOG_ENTRIES) {
+    run.logs.splice(0, run.logs.length - MAX_LOG_ENTRIES);
   }
 }
 
@@ -91,39 +91,39 @@ function getCodexClient() {
   });
 }
 
-function getExecutionState(runId) {
-  if (!executionRegistry.has(runId)) {
-    executionRegistry.set(runId, {
+function getExecutionState(batchId) {
+  if (!executionRegistry.has(batchId)) {
+    executionRegistry.set(batchId, {
       titleController: null,
       generationController: null,
-      agentControllers: new Map(),
+      runControllers: new Map(),
     });
   }
 
-  return executionRegistry.get(runId);
+  return executionRegistry.get(batchId);
 }
 
-function clearExecutionState(runId) {
-  executionRegistry.delete(runId);
+function clearExecutionState(batchId) {
+  executionRegistry.delete(batchId);
 }
 
-function maybeClearExecutionState(runId, execution) {
+function maybeClearExecutionState(batchId, execution) {
   if (!execution) {
     return;
   }
 
-  if (execution.titleController || execution.generationController || execution.agentControllers.size > 0) {
+  if (execution.titleController || execution.generationController || execution.runControllers.size > 0) {
     return;
   }
 
-  if (executionRegistry.get(runId) === execution) {
-    clearExecutionState(runId);
+  if (executionRegistry.get(batchId) === execution) {
+    clearExecutionState(batchId);
   }
 }
 
-function buildAgentRecord(task, index) {
+function buildRunRecord(task, index) {
   return {
-    id: `agent-${index + 1}-${Math.random().toString(36).slice(2, 8)}`,
+    id: `run-${index + 1}-${Math.random().toString(36).slice(2, 8)}`,
     index,
     title: task.title,
     prompt: task.prompt,
@@ -189,7 +189,7 @@ function getProjectFolderName(projectPath) {
   return parts.at(-1) || normalizedPath;
 }
 
-function buildRunTitleSchema() {
+function buildBatchTitleSchema() {
   return {
     type: "object",
     additionalProperties: false,
@@ -200,22 +200,22 @@ function buildRunTitleSchema() {
   };
 }
 
-function buildRunTitlePrompt(run) {
-  const sourcePrompt = run.mode === "generated" ? run.config.taskPrompt : run.config.prompt;
-  const projectFolder = getProjectFolderName(run.config.projectPath);
+function buildBatchTitlePrompt(batch) {
+  const sourcePrompt = batch.mode === "generated" ? batch.config.taskPrompt : batch.config.prompt;
+  const projectFolder = getProjectFolderName(batch.config.projectPath);
 
   return [
-    "Name this coding run for a dashboard.",
+    "Name this coding batch for a dashboard.",
     "Write a concise title that captures the actual engineering goal from the user's prompt.",
     "Requirements:",
     "- 3 to 7 words.",
     "- Specific and concrete.",
     "- No quotes.",
     "- No trailing punctuation.",
-    "- Avoid generic words like workflow, run, agent, repeated, or generated unless they are required for clarity.",
-    `Project folder: ${projectFolder || run.config.projectPath}`,
-    `Mode: ${run.mode}`,
-    `Agent count: ${run.config.runCount}`,
+    "- Avoid generic words like workflow, batch, run, agent, repeated, or generated unless they are required for clarity.",
+    `Project folder: ${projectFolder || batch.config.projectPath}`,
+    `Mode: ${batch.mode}`,
+    `Run count: ${batch.config.runCount}`,
     "User prompt:",
     truncateText(sourcePrompt, 4_000),
     'Return JSON with a single "title" field.',
@@ -243,7 +243,7 @@ function describeItem(item) {
     case "file_change":
       return `Patch ${item.status}: ${(item.changes || []).map((change) => change.path).join(", ") || "file updates"}`;
     case "agent_message":
-      return "Agent produced a response.";
+      return "Codex produced a response.";
     case "reasoning":
       return "Reasoning summary updated.";
     case "todo_list":
@@ -259,58 +259,58 @@ function describeItem(item) {
   }
 }
 
-function deriveRunStatus(run) {
-  if (run.cancelRequested && run.agents.every((agent) => agent.status === "cancelled" || agent.status === "completed" || agent.status === "failed")) {
+function deriveBatchStatus(batch) {
+  if (batch.cancelRequested && batch.runs.every((run) => run.status === "cancelled" || run.status === "completed" || run.status === "failed")) {
     return "cancelled";
   }
 
-  if (run.agents.some((agent) => agent.status === "failed")) {
+  if (batch.runs.some((run) => run.status === "failed")) {
     return "failed";
   }
 
-  if (run.agents.every((agent) => agent.status === "completed")) {
+  if (batch.runs.every((run) => run.status === "completed")) {
     return "completed";
   }
 
-  if (run.agents.some((agent) => agent.status === "running")) {
+  if (batch.runs.some((run) => run.status === "running")) {
     return "running";
   }
 
-  if (run.cancelRequested) {
+  if (batch.cancelRequested) {
     return "cancelled";
   }
 
   return "queued";
 }
 
-async function generateTasks(store, runId, projectContext) {
-  const run = store.getRun(runId);
-  const execution = getExecutionState(runId);
+async function generateTasks(store, batchId, projectContext) {
+  const batch = store.getBatch(batchId);
+  const execution = getExecutionState(batchId);
   const controller = new AbortController();
   execution.generationController = controller;
 
-  store.updateRun(runId, (mutableRun) => {
-    mutableRun.generation.status = "running";
-    mutableRun.generation.startedAt = nowIso();
-    mutableRun.generation.error = null;
+  store.updateBatch(batchId, (mutableBatch) => {
+    mutableBatch.generation.status = "running";
+    mutableBatch.generation.startedAt = nowIso();
+    mutableBatch.generation.error = null;
   });
 
   try {
     const codex = getCodexClient();
     const thread = codex.startThread({
-      model: run.config.model || undefined,
-      sandboxMode: run.config.sandboxMode,
-      approvalPolicy: run.config.approvalPolicy,
+      model: batch.config.model || undefined,
+      sandboxMode: batch.config.sandboxMode,
+      approvalPolicy: batch.config.approvalPolicy,
       workingDirectory: projectContext.projectPath,
-      networkAccessEnabled: run.config.networkAccessEnabled,
-      webSearchEnabled: run.config.webSearchMode !== "disabled",
-      webSearchMode: run.config.webSearchMode,
-      modelReasoningEffort: run.config.reasoningEffort || undefined,
+      networkAccessEnabled: batch.config.networkAccessEnabled,
+      webSearchEnabled: batch.config.webSearchMode !== "disabled",
+      webSearchMode: batch.config.webSearchMode,
+      modelReasoningEffort: batch.config.reasoningEffort || undefined,
     });
 
-    const result = await thread.run(buildTaskGenerationPrompt(run.config.taskPrompt, run.config.runCount), {
+    const result = await thread.run(buildTaskGenerationPrompt(batch.config.taskPrompt, batch.config.runCount), {
       signal: controller.signal,
-      outputSchema: buildTaskSchema(run.config.runCount),
+      outputSchema: buildTaskSchema(batch.config.runCount),
     });
 
     const parsed = JSON.parse(result.finalResponse);
@@ -319,51 +319,51 @@ async function generateTasks(store, runId, projectContext) {
       prompt: task.prompt,
     }));
 
-    store.updateRun(runId, (mutableRun) => {
-      mutableRun.generation.status = "completed";
-      mutableRun.generation.completedAt = nowIso();
-      mutableRun.generation.tasks = tasks;
+    store.updateBatch(batchId, (mutableBatch) => {
+      mutableBatch.generation.status = "completed";
+      mutableBatch.generation.completedAt = nowIso();
+      mutableBatch.generation.tasks = tasks;
     });
 
     return tasks;
   } catch (error) {
     const message = isAbortError(error) ? "Task generation cancelled." : error.message;
 
-    store.updateRun(runId, (mutableRun) => {
-      mutableRun.generation.status = isAbortError(error) ? "cancelled" : "failed";
-      mutableRun.generation.completedAt = nowIso();
-      mutableRun.generation.error = message;
-      mutableRun.error = message;
+    store.updateBatch(batchId, (mutableBatch) => {
+      mutableBatch.generation.status = isAbortError(error) ? "cancelled" : "failed";
+      mutableBatch.generation.completedAt = nowIso();
+      mutableBatch.generation.error = message;
+      mutableBatch.error = message;
     });
 
     throw error;
   } finally {
     execution.generationController = null;
-    maybeClearExecutionState(runId, execution);
+    maybeClearExecutionState(batchId, execution);
   }
 }
 
-export async function generateRunTitle(store, runId) {
-  const run = store.getRun(runId);
-  if (!run) {
+export async function generateBatchTitle(store, batchId) {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
     return null;
   }
 
-  const sourcePrompt = run.mode === "generated" ? run.config.taskPrompt : run.config.prompt;
+  const sourcePrompt = batch.mode === "generated" ? batch.config.taskPrompt : batch.config.prompt;
   if (!sourcePrompt) {
-    return run.title;
+    return batch.title;
   }
 
-  const execution = getExecutionState(runId);
+  const execution = getExecutionState(batchId);
   const controller = new AbortController();
   execution.titleController = controller;
 
   const codex = getCodexClient();
   const thread = codex.startThread({
-    model: run.config.model || undefined,
+    model: batch.config.model || undefined,
     sandboxMode: "read-only",
     approvalPolicy: "never",
-    workingDirectory: run.config.projectPath,
+    workingDirectory: batch.config.projectPath,
     networkAccessEnabled: false,
     webSearchEnabled: false,
     webSearchMode: "disabled",
@@ -371,55 +371,55 @@ export async function generateRunTitle(store, runId) {
   });
 
   try {
-    const result = await thread.run(buildRunTitlePrompt(run), {
+    const result = await thread.run(buildBatchTitlePrompt(batch), {
       signal: controller.signal,
-      outputSchema: buildRunTitleSchema(),
+      outputSchema: buildBatchTitleSchema(),
     });
 
     const parsed = JSON.parse(result.finalResponse);
-    const nextTitle = sanitizeGeneratedTitle(parsed.title, run.title);
+    const nextTitle = sanitizeGeneratedTitle(parsed.title, batch.title);
 
-    store.updateRun(runId, (mutableRun) => {
-      mutableRun.title = nextTitle;
+    store.updateBatch(batchId, (mutableBatch) => {
+      mutableBatch.title = nextTitle;
     });
 
     return nextTitle;
   } catch (error) {
-    if (isAbortError(error) || !store.getMutableRun(runId)) {
+    if (isAbortError(error) || !store.getMutableBatch(batchId)) {
       return null;
     }
     throw error;
   } finally {
     execution.titleController = null;
-    maybeClearExecutionState(runId, execution);
+    maybeClearExecutionState(batchId, execution);
   }
 }
 
-async function executeAgent(store, runId, agentId, projectContext) {
-  const run = store.getRun(runId);
-  const agentSnapshot = run.agents.find((entry) => entry.id === agentId);
-  const execution = getExecutionState(runId);
+async function executeRun(store, batchId, runId, projectContext) {
+  const batch = store.getBatch(batchId);
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  const execution = getExecutionState(batchId);
   const controller = new AbortController();
-  execution.agentControllers.set(agentId, controller);
+  execution.runControllers.set(runId, controller);
 
   let worktreePath = null;
 
-  store.updateAgent(runId, agentId, (agent) => {
-    agent.status = "running";
-    agent.startedAt = nowIso();
-    appendLog(agent, "info", "Preparing git worktree.");
+  store.updateRun(batchId, runId, (run) => {
+    run.status = "running";
+    run.startedAt = nowIso();
+    appendLog(run, "info", "Preparing git worktree.");
   });
 
   try {
-    const baseRef = run.config.baseRef || projectContext.branchName || projectContext.headSha;
+    const baseRef = batch.config.baseRef || projectContext.branchName || projectContext.headSha;
     worktreePath = await createWorktree({
       repoRoot: projectContext.repoRoot,
       projectPath: projectContext.projectPath,
-      worktreeRoot: run.config.worktreeRoot,
+      worktreeRoot: batch.config.worktreeRoot,
       baseRef,
       branchName: projectContext.branchName,
       headSha: projectContext.headSha,
-      agentIndex: agentSnapshot.index,
+      runIndex: runSnapshot.index,
     });
 
     const workingDirectory =
@@ -427,69 +427,69 @@ async function executeAgent(store, runId, agentId, projectContext) {
         ? worktreePath
         : path.join(worktreePath, projectContext.relativeProjectPath);
 
-    store.updateAgent(runId, agentId, (agent) => {
-      agent.worktreePath = worktreePath;
-      agent.workingDirectory = workingDirectory;
-      agent.baseRef = baseRef;
-      appendLog(agent, "info", `Worktree ready at ${worktreePath}.`);
+    store.updateRun(batchId, runId, (run) => {
+      run.worktreePath = worktreePath;
+      run.workingDirectory = workingDirectory;
+      run.baseRef = baseRef;
+      appendLog(run, "info", `Worktree ready at ${worktreePath}.`);
     });
 
     const codex = getCodexClient();
     const thread = codex.startThread({
-      model: run.config.model || undefined,
-      sandboxMode: run.config.sandboxMode,
-      approvalPolicy: run.config.approvalPolicy,
+      model: batch.config.model || undefined,
+      sandboxMode: batch.config.sandboxMode,
+      approvalPolicy: batch.config.approvalPolicy,
       workingDirectory,
-      networkAccessEnabled: run.config.networkAccessEnabled,
-      webSearchEnabled: run.config.webSearchMode !== "disabled",
-      webSearchMode: run.config.webSearchMode,
-      modelReasoningEffort: run.config.reasoningEffort || undefined,
+      networkAccessEnabled: batch.config.networkAccessEnabled,
+      webSearchEnabled: batch.config.webSearchMode !== "disabled",
+      webSearchMode: batch.config.webSearchMode,
+      modelReasoningEffort: batch.config.reasoningEffort || undefined,
     });
 
-    const { events } = await thread.runStreamed(agentSnapshot.prompt, {
+    const { events } = await thread.runStreamed(runSnapshot.prompt, {
       signal: controller.signal,
     });
 
     for await (const event of events) {
-      store.updateAgent(runId, agentId, (agent) => {
+      store.updateRun(batchId, runId, (run) => {
         switch (event.type) {
           case "thread.started":
-            agent.threadId = event.thread_id;
-            appendLog(agent, "info", `Thread started: ${event.thread_id}`);
+            run.threadId = event.thread_id;
+            appendLog(run, "info", `Thread started: ${event.thread_id}`);
             break;
           case "turn.started":
-            appendLog(agent, "info", "Codex turn started.");
+            appendLog(run, "info", "Codex turn started.");
             break;
           case "turn.completed":
-            agent.usage = event.usage;
-            appendLog(agent, "info", event.usage
+            run.usage = event.usage;
+            appendLog(run, "info", event.usage
               ? `Turn completed. Tokens in/out: ${event.usage.input_tokens}/${event.usage.output_tokens}.`
               : "Turn completed.");
             break;
           case "turn.failed":
-            agent.error = event.error.message;
-            appendLog(agent, "error", event.error.message);
+            run.error = event.error.message;
+            appendLog(run, "error", event.error.message);
             break;
           case "item.started":
-            upsertItem(agent, event.item);
-            appendLog(agent, "info", describeItem(event.item));
+            upsertItem(run, event.item);
+            appendLog(run, "info", describeItem(event.item));
             break;
           case "item.updated":
-            upsertItem(agent, event.item);
+            upsertItem(run, event.item);
             break;
           case "item.completed":
-            upsertItem(agent, event.item);
+            upsertItem(run, event.item);
             if (event.item.type === "agent_message") {
-              agent.finalResponse = truncateText(event.item.text ?? "");
+              run.finalResponse = truncateText(event.item.text ?? "");
             }
             if (event.item.type === "error") {
-              agent.error = event.item.message;
+              run.error = event.item.message;
             }
-            appendLog(agent, "info", describeItem(event.item));
+            appendLog(run, "info", describeItem(event.item));
             break;
           case "error":
-            agent.error = event.message;
-            appendLog(agent, "error", event.message);
+            run.error = event.message;
+            appendLog(run, "error", event.message);
             break;
           default:
             break;
@@ -499,29 +499,29 @@ async function executeAgent(store, runId, agentId, projectContext) {
 
     const review = worktreePath ? await collectWorktreeReview(worktreePath) : null;
 
-    store.updateAgent(runId, agentId, (agent) => {
-      agent.status = agent.error ? "failed" : "completed";
-      agent.completedAt = nowIso();
-      agent.review = review;
+    store.updateRun(batchId, runId, (run) => {
+      run.status = run.error ? "failed" : "completed";
+      run.completedAt = nowIso();
+      run.review = review;
 
-      if (!agent.error) {
-        appendLog(agent, "info", "Agent run completed.");
+      if (!run.error) {
+        appendLog(run, "info", "Run completed.");
       }
     });
   } catch (error) {
-    const cancelled = isAbortError(error) || store.getMutableRun(runId)?.cancelRequested;
+    const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
     const review = worktreePath ? await collectWorktreeReview(worktreePath).catch(() => null) : null;
 
-    store.updateAgent(runId, agentId, (agent) => {
-      agent.status = cancelled ? "cancelled" : "failed";
-      agent.completedAt = nowIso();
-      agent.error = cancelled ? "Run cancelled." : error.message;
-      agent.review = review ?? agent.review;
-      appendLog(agent, cancelled ? "warning" : "error", agent.error);
+    store.updateRun(batchId, runId, (run) => {
+      run.status = cancelled ? "cancelled" : "failed";
+      run.completedAt = nowIso();
+      run.error = cancelled ? "Batch cancelled." : error.message;
+      run.review = review ?? run.review;
+      appendLog(run, cancelled ? "warning" : "error", run.error);
     });
   } finally {
-    execution.agentControllers.delete(agentId);
-    maybeClearExecutionState(runId, execution);
+    execution.runControllers.delete(runId);
+    maybeClearExecutionState(batchId, execution);
   }
 }
 
@@ -543,122 +543,122 @@ async function runWithConcurrency(items, concurrency, worker) {
   await Promise.all(activeWorkers);
 }
 
-export async function runMode(store, runId) {
-  const run = store.getRun(runId);
-  if (!run) {
+export async function executeBatch(store, batchId) {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
     return;
   }
 
-  const execution = getExecutionState(runId);
+  const execution = getExecutionState(batchId);
 
-  store.updateRun(runId, (mutableRun) => {
-    mutableRun.status = "running";
-    mutableRun.startedAt = nowIso();
+  store.updateBatch(batchId, (mutableBatch) => {
+    mutableBatch.status = "running";
+    mutableBatch.startedAt = nowIso();
   });
 
   try {
-    const projectContext = await inspectProject(run.config.projectPath);
-    store.updateRun(runId, (mutableRun) => {
-      mutableRun.projectContext = projectContext;
+    const projectContext = await inspectProject(batch.config.projectPath);
+    store.updateBatch(batchId, (mutableBatch) => {
+      mutableBatch.projectContext = projectContext;
     });
 
     const tasks =
-      run.mode === "generated"
-        ? await generateTasks(store, runId, projectContext)
-        : Array.from({ length: run.config.runCount }, (_, index) => ({
+      batch.mode === "generated"
+        ? await generateTasks(store, batchId, projectContext)
+        : Array.from({ length: batch.config.runCount }, (_, index) => ({
             title: `Run ${index + 1}`,
-            prompt: run.config.prompt,
+            prompt: batch.config.prompt,
           }));
 
     for (const [index, task] of tasks.entries()) {
-      store.appendAgent(runId, buildAgentRecord(task, index));
+      store.appendRun(batchId, buildRunRecord(task, index));
     }
 
-    const latestRun = store.getRun(runId);
-    await runWithConcurrency(latestRun.agents, latestRun.config.concurrency, async (agent) => {
-      const mutableRun = store.getMutableRun(runId);
-      if (!mutableRun || mutableRun.cancelRequested) {
-        store.updateAgent(runId, agent.id, (mutableAgent) => {
-          mutableAgent.status = "cancelled";
-          mutableAgent.completedAt = nowIso();
-          mutableAgent.error = "Run cancelled before start.";
-          appendLog(mutableAgent, "warning", mutableAgent.error);
+    const latestBatch = store.getBatch(batchId);
+    await runWithConcurrency(latestBatch.runs, latestBatch.config.concurrency, async (run) => {
+      const mutableBatch = store.getMutableBatch(batchId);
+      if (!mutableBatch || mutableBatch.cancelRequested) {
+        store.updateRun(batchId, run.id, (mutableRun) => {
+          mutableRun.status = "cancelled";
+          mutableRun.completedAt = nowIso();
+          mutableRun.error = "Batch cancelled before start.";
+          appendLog(mutableRun, "warning", mutableRun.error);
         });
         return;
       }
 
-      await executeAgent(store, runId, agent.id, projectContext);
+      await executeRun(store, batchId, run.id, projectContext);
     });
 
-    store.updateRun(runId, (mutableRun) => {
-      mutableRun.status = deriveRunStatus(mutableRun);
-      mutableRun.completedAt = nowIso();
+    store.updateBatch(batchId, (mutableBatch) => {
+      mutableBatch.status = deriveBatchStatus(mutableBatch);
+      mutableBatch.completedAt = nowIso();
     });
   } catch (error) {
-    const cancelled = isAbortError(error) || store.getMutableRun(runId)?.cancelRequested;
+    const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
 
-    store.updateRun(runId, (mutableRun) => {
-      mutableRun.status = cancelled ? "cancelled" : "failed";
-      mutableRun.completedAt = nowIso();
-      mutableRun.error = cancelled ? "Run cancelled." : error.message;
+    store.updateBatch(batchId, (mutableBatch) => {
+      mutableBatch.status = cancelled ? "cancelled" : "failed";
+      mutableBatch.completedAt = nowIso();
+      mutableBatch.error = cancelled ? "Batch cancelled." : error.message;
 
-      for (const agent of mutableRun.agents) {
-        if (agent.status === "queued") {
-          agent.status = cancelled ? "cancelled" : "failed";
-          agent.completedAt = nowIso();
-          agent.error = mutableRun.error;
+      for (const run of mutableBatch.runs) {
+        if (run.status === "queued") {
+          run.status = cancelled ? "cancelled" : "failed";
+          run.completedAt = nowIso();
+          run.error = mutableBatch.error;
         }
       }
     });
   } finally {
     execution.generationController?.abort();
-    for (const controller of execution.agentControllers.values()) {
+    for (const controller of execution.runControllers.values()) {
       controller.abort();
     }
     execution.generationController = null;
-    execution.agentControllers.clear();
-    maybeClearExecutionState(runId, execution);
+    execution.runControllers.clear();
+    maybeClearExecutionState(batchId, execution);
   }
 }
 
-export function cancelRun(store, runId) {
-  const run = store.getMutableRun(runId);
-  if (!run) {
+export function cancelBatch(store, batchId) {
+  const batch = store.getMutableBatch(batchId);
+  if (!batch) {
     return null;
   }
 
-  run.cancelRequested = true;
-  if (run.status === "queued") {
-    run.status = "cancelled";
-    run.completedAt = nowIso();
+  batch.cancelRequested = true;
+  if (batch.status === "queued") {
+    batch.status = "cancelled";
+    batch.completedAt = nowIso();
   }
 
-  const execution = executionRegistry.get(runId);
+  const execution = executionRegistry.get(batchId);
   execution?.titleController?.abort();
   execution?.generationController?.abort();
-  for (const controller of execution?.agentControllers.values() ?? []) {
+  for (const controller of execution?.runControllers.values() ?? []) {
     controller.abort();
   }
 
-  store.updateRun(runId, () => {});
-  return store.getRun(runId);
+  store.updateBatch(batchId, () => {});
+  return store.getBatch(batchId);
 }
 
-export function deleteRun(store, runId) {
-  const run = store.getMutableRun(runId);
-  if (!run) {
+export function deleteBatch(store, batchId) {
+  const batch = store.getMutableBatch(batchId);
+  if (!batch) {
     return null;
   }
 
-  run.cancelRequested = true;
+  batch.cancelRequested = true;
 
-  const execution = executionRegistry.get(runId);
+  const execution = executionRegistry.get(batchId);
   execution?.titleController?.abort();
   execution?.generationController?.abort();
-  for (const controller of execution?.agentControllers.values() ?? []) {
+  for (const controller of execution?.runControllers.values() ?? []) {
     controller.abort();
   }
 
-  clearExecutionState(runId);
-  return store.deleteRun(runId);
+  clearExecutionState(batchId);
+  return store.deleteBatch(batchId);
 }

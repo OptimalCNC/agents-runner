@@ -2,10 +2,10 @@
 const state = {
   config: null,
   mode: "repeated",
-  runs: [],
-  runDetails: new Map(),
+  batches: [],
+  batchDetails: new Map(),
+  selectedBatchId: null,
   selectedRunId: null,
-  selectedAgentId: null,
   activeTab: "overview",
   browserTarget: null,
   browserPath: null,
@@ -34,11 +34,11 @@ const el = {
   connectionText: $("#connectionText"),
   runtimeBadge: $("#runtimeBadge"),
   runtimeText: $("#runtimeText"),
-  newRunButton: $("#newRunButton"),
+  newBatchButton: $("#newBatchButton"),
   drawerOverlay: $("#drawerOverlay"),
-  drawer: $("#newRunDrawer"),
+  drawer: $("#newBatchDrawer"),
   closeDrawerButton: $("#closeDrawerButton"),
-  runForm: $("#runForm"),
+  batchForm: $("#batchForm"),
   projectPath: $("#projectPath"),
   worktreeRoot: $("#worktreeRoot"),
   baseRef: $("#baseRef"),
@@ -68,8 +68,8 @@ const el = {
   inspectBranch: $("#inspectBranch"),
   inspectHead: $("#inspectHead"),
   projectFilters: $("#projectFilters"),
-  runsList: $("#runsList"),
-  runCountBadge: $("#runCountBadge"),
+  batchesList: $("#batchesList"),
+  batchCountBadge: $("#batchCountBadge"),
   mainContent: $("#mainContent"),
   browserDialog: $("#browserDialog"),
   browserTitle: $("#browserTitle"),
@@ -610,12 +610,12 @@ function getPathLeaf(targetPath) {
   return segments[segments.length - 1] || source;
 }
 
-function getProjectPath(run) {
-  return run?.config?.projectPath || "";
+function getProjectPath(batch) {
+  return batch?.config?.projectPath || "";
 }
 
 function getProjectFilterOptions() {
-  const projectPaths = Array.from(new Set(state.runs.map(getProjectPath).filter(Boolean)))
+  const projectPaths = Array.from(new Set(state.batches.map(getProjectPath).filter(Boolean)))
     .sort((left, right) => {
       const byLeaf = getPathLeaf(left).localeCompare(getPathLeaf(right));
       return byLeaf || left.localeCompare(right);
@@ -644,13 +644,13 @@ function normalizeProjectFilters() {
   return options;
 }
 
-function getVisibleRuns() {
+function getVisibleBatches() {
   if (state.projectFilters.length === 0) {
-    return state.runs;
+    return state.batches;
   }
 
   const activeFilters = new Set(state.projectFilters);
-  return state.runs.filter((run) => activeFilters.has(getProjectPath(run)));
+  return state.batches.filter((batch) => activeFilters.has(getProjectPath(batch)));
 }
 
 /* ─── Toast System ─── */
@@ -739,58 +739,58 @@ function syncConcurrencyField() {
   if (Number(el.concurrency.value) > runCount) el.concurrency.value = String(runCount);
 }
 
-function sortRuns() {
-  state.runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+function sortBatches() {
+  state.batches.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function upsertRunSummary(summary) {
-  const idx = state.runs.findIndex((r) => r.id === summary.id);
-  if (idx >= 0) state.runs[idx] = summary;
-  else state.runs.push(summary);
-  sortRuns();
+function upsertBatchSummary(summary) {
+  const idx = state.batches.findIndex((r) => r.id === summary.id);
+  if (idx >= 0) state.batches[idx] = summary;
+  else state.batches.push(summary);
+  sortBatches();
 }
 
-function getSelectedRun() {
-  return state.selectedRunId ? state.runDetails.get(state.selectedRunId) || null : null;
+function getSelectedBatch() {
+  return state.selectedBatchId ? state.batchDetails.get(state.selectedBatchId) || null : null;
 }
 
-async function syncSelectedRun() {
+async function syncSelectedBatch() {
   normalizeProjectFilters();
-  const visibleRuns = getVisibleRuns();
-  const selectedRunIsVisible = visibleRuns.some((run) => run.id === state.selectedRunId);
+  const visibleBatches = getVisibleBatches();
+  const selectedBatchIsVisible = visibleBatches.some((batch) => batch.id === state.selectedBatchId);
 
-  if (!selectedRunIsVisible) {
-    state.selectedRunId = visibleRuns[0]?.id || null;
-    state.selectedAgentId = null;
+  if (!selectedBatchIsVisible) {
+    state.selectedBatchId = visibleBatches[0]?.id || null;
+    state.selectedRunId = null;
     state.activeTab = "overview";
   }
 
-  renderRuns();
+  renderBatches();
 
-  if (!state.selectedRunId) {
-    renderRunDetail();
+  if (!state.selectedBatchId) {
+    renderBatchDetail();
     return;
   }
 
-  if (!state.runDetails.has(state.selectedRunId)) {
-    await loadRunDetail(state.selectedRunId);
+  if (!state.batchDetails.has(state.selectedBatchId)) {
+    await loadBatchDetail(state.selectedBatchId);
     return;
   }
 
-  renderRunDetail();
+  renderBatchDetail();
 }
 
-async function removeRunFromState(runId) {
-  state.runs = state.runs.filter((run) => run.id !== runId);
-  state.runDetails.delete(runId);
+async function removeBatchFromState(batchId) {
+  state.batches = state.batches.filter((batch) => batch.id !== batchId);
+  state.batchDetails.delete(batchId);
 
-  if (state.selectedRunId === runId) {
+  if (state.selectedBatchId === batchId) {
+    state.selectedBatchId = null;
     state.selectedRunId = null;
-    state.selectedAgentId = null;
     state.activeTab = "overview";
   }
 
-  await syncSelectedRun();
+  await syncSelectedBatch();
 }
 
 /* ─── Status Pill ─── */
@@ -830,11 +830,11 @@ function renderProjectInspect() {
   el.inspectHead.textContent = state.projectInspect.headSha;
 }
 
-/* ─── Render: Sidebar Run Cards ─── */
-function summarizeProgress(run) {
-  const c = run.completedAgents ?? 0;
-  const f = run.failedAgents ?? 0;
-  const k = run.cancelledAgents ?? 0;
+/* ─── Render: Sidebar Batch Cards ─── */
+function summarizeProgress(summary) {
+  const c = summary.completedRuns ?? 0;
+  const f = summary.failedRuns ?? 0;
+  const k = summary.cancelledRuns ?? 0;
   const parts = [];
   if (c) parts.push(`${c} done`);
   if (f) parts.push(`${f} failed`);
@@ -842,41 +842,41 @@ function summarizeProgress(run) {
   return parts.join(", ") || "Waiting\u2026";
 }
 
-function createRunCard(summary) {
-  const totalDone = summary.completedAgents + summary.failedAgents + summary.cancelledAgents;
-  const progress = summary.totalAgents ? Math.round((totalDone / summary.totalAgents) * 100) : 0;
-  const selected = summary.id === state.selectedRunId ? " is-selected" : "";
-  const hasFail = summary.failedAgents > 0 ? " has-failures" : "";
+function createBatchCard(summary) {
+  const totalDone = summary.completedRuns + summary.failedRuns + summary.cancelledRuns;
+  const progress = summary.totalRuns ? Math.round((totalDone / summary.totalRuns) * 100) : 0;
+  const selected = summary.id === state.selectedBatchId ? " is-selected" : "";
+  const hasFail = summary.failedRuns > 0 ? " has-failures" : "";
   const projectPath = summary.config?.projectPath || "";
   const projectFolder = getPathLeaf(projectPath);
 
   return `
-    <div class="run-card${selected}" data-run-id="${escapeHtml(summary.id)}">
-      <div class="run-card-top">
-        <div class="run-card-info">
-          <div class="run-card-title">${escapeHtml(summary.title)}</div>
-          <div class="run-card-meta">${escapeHtml(formatModeLabel(summary.mode))} \u00b7 ${escapeHtml(formatRelative(summary.createdAt))}</div>
+    <div class="batch-card${selected}" data-batch-id="${escapeHtml(summary.id)}">
+      <div class="batch-card-top">
+        <div class="batch-card-info">
+          <div class="batch-card-title">${escapeHtml(summary.title)}</div>
+          <div class="batch-card-meta">${escapeHtml(formatModeLabel(summary.mode))} \u00b7 ${escapeHtml(formatRelative(summary.createdAt))}</div>
           ${projectFolder
-            ? `<div class="run-card-project" title="${escapeHtml(projectPath)}">${icons.folder}<span>${escapeHtml(projectFolder)}</span></div>`
+            ? `<div class="batch-card-project" title="${escapeHtml(projectPath)}">${icons.folder}<span>${escapeHtml(projectFolder)}</span></div>`
             : ""}
         </div>
-        <div class="run-card-actions">
+        <div class="batch-card-actions">
           ${statusPill(summary.status)}
           <button
-            class="btn-icon run-card-delete"
+            class="btn-icon batch-card-delete"
             type="button"
-            title="Remove run"
-            aria-label="Remove run"
-            data-action="delete-run"
-            data-run-id="${escapeHtml(summary.id)}"
+            title="Remove batch"
+            aria-label="Remove batch"
+            data-action="delete-batch"
+            data-batch-id="${escapeHtml(summary.id)}"
           >
             ${icons.x}
           </button>
         </div>
       </div>
-      <div class="run-card-progress">
+      <div class="batch-card-progress">
         <div class="progress-bar"><div class="progress-bar-fill${hasFail}" style="width:${progress}%"></div></div>
-        <div class="progress-label">${escapeHtml(summarizeProgress(summary))} (${totalDone}/${summary.totalAgents})</div>
+        <div class="progress-label">${escapeHtml(summarizeProgress(summary))} (${totalDone}/${summary.totalRuns})</div>
       </div>
     </div>
   `;
@@ -904,31 +904,31 @@ function renderProjectFilter() {
   `).join("");
 }
 
-function renderRuns() {
+function renderBatches() {
   renderProjectFilter();
 
-  const visibleRuns = getVisibleRuns();
-  el.runCountBadge.textContent = state.projectFilters.length > 0
-    ? `${visibleRuns.length}/${state.runs.length}`
-    : String(state.runs.length);
+  const visibleBatches = getVisibleBatches();
+  el.batchCountBadge.textContent = state.projectFilters.length > 0
+    ? `${visibleBatches.length}/${state.batches.length}`
+    : String(state.batches.length);
 
-  if (visibleRuns.length === 0) {
-    el.runsList.innerHTML = `
+  if (visibleBatches.length === 0) {
+    el.batchesList.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
         </div>
-        <p class="empty-title">${escapeHtml(state.projectFilters.length > 0 ? "No matching runs" : "No runs yet")}</p>
-        <p class="empty-desc">${escapeHtml(state.projectFilters.length > 0 ? "Adjust the project filters." : "Click \"New Run\" to get started")}</p>
+        <p class="empty-title">${escapeHtml(state.projectFilters.length > 0 ? "No matching batches" : "No batches yet")}</p>
+        <p class="empty-desc">${escapeHtml(state.projectFilters.length > 0 ? "Adjust the project filters." : "Click \"New Batch\" to get started")}</p>
       </div>
     `;
     return;
   }
 
-  el.runsList.innerHTML = visibleRuns.map(createRunCard).join("");
+  el.batchesList.innerHTML = visibleBatches.map(createBatchCard).join("");
 }
 
-/* ─── Render: Run Detail ─── */
+/* ─── Render: Batch Detail ─── */
 function renderTasksSection(generation) {
   if (!generation) return "";
 
@@ -951,33 +951,33 @@ function renderTasksSection(generation) {
   `;
 }
 
-function renderAgentCards(run) {
-  if (!run.agents.length) {
+function renderRunCards(batch) {
+  if (!batch.runs.length) {
     return `
       <div class="empty-state">
         <div class="empty-icon">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         </div>
-        <p class="empty-title">Waiting for agents</p>
-        <p class="empty-desc">Work items appear once the run creates them.</p>
+        <p class="empty-title">Waiting for runs</p>
+        <p class="empty-desc">Work items appear once the batch creates them.</p>
       </div>
     `;
   }
 
   return `
-    <div class="agents-grid">
-      ${run.agents.map((agent) => {
-        const sel = agent.id === state.selectedAgentId ? " is-selected" : "";
+    <div class="runs-grid">
+      ${batch.runs.map((run) => {
+        const sel = run.id === state.selectedRunId ? " is-selected" : "";
         return `
-          <div class="agent-card${sel}" data-agent-id="${escapeHtml(agent.id)}">
-            <div class="agent-card-top">
-              <div class="agent-card-title">${escapeHtml(agent.title)}</div>
-              ${statusPill(agent.status)}
+          <div class="run-card${sel}" data-run-id="${escapeHtml(run.id)}">
+            <div class="run-card-top">
+              <div class="run-card-title">${escapeHtml(run.title)}</div>
+              ${statusPill(run.status)}
             </div>
-            <div class="agent-card-meta">Agent ${agent.index + 1}</div>
+            <div class="run-card-meta">Run ${run.index + 1}</div>
             <div class="tag-row">
-              ${agent.threadId ? `<span class="tag">Thread ${escapeHtml(agent.threadId)}</span>` : ""}
-              ${agent.review?.statusShort ? `<span class="tag">${escapeHtml(agent.review.statusShort.split("\n")[0])}</span>` : ""}
+              ${run.threadId ? `<span class="tag">Thread ${escapeHtml(run.threadId)}</span>` : ""}
+              ${run.review?.statusShort ? `<span class="tag">${escapeHtml(run.review.statusShort.split("\n")[0])}</span>` : ""}
             </div>
           </div>
         `;
@@ -986,58 +986,58 @@ function renderAgentCards(run) {
   `;
 }
 
-function renderAgentDetailTabs(agent) {
-  if (!agent) {
+function renderRunDetailTabs(run) {
+  if (!run) {
     return `
-      <div class="agent-detail">
+      <div class="run-detail">
         <div class="empty-state">
           <div class="empty-icon">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           </div>
-          <p class="empty-title">No agent selected</p>
-          <p class="empty-desc">Select an agent card above to inspect details.</p>
+          <p class="empty-title">No run selected</p>
+          <p class="empty-desc">Select a run card above to inspect details.</p>
         </div>
       </div>
     `;
   }
 
   const activeTab = state.activeTab === "items" ? "history" : (state.activeTab || "overview");
-  const directory = agent.workingDirectory || agent.worktreePath || "Pending";
+  const directory = run.workingDirectory || run.worktreePath || "Pending";
 
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "response", label: "Response" },
     { key: "review", label: "Review" },
-    { key: "history", label: `History (${agent.items.length})` },
-    { key: "logs", label: `Logs (${agent.logs.length})` },
+    { key: "history", label: `History (${run.items.length})` },
+    { key: "logs", label: `Logs (${run.logs.length})` },
   ];
 
   const overviewPanel = `
     <div class="tab-panel${activeTab === "overview" ? " is-active" : ""}" data-tab="overview">
       <div class="meta-group">
-        <div class="meta-row"><span class="meta-row-label">Status</span>${statusPill(agent.status)}</div>
+        <div class="meta-row"><span class="meta-row-label">Status</span>${statusPill(run.status)}</div>
         <div class="meta-row"><span class="meta-row-label">Directory</span><span class="meta-row-value mono">${escapeHtml(directory)}</span></div>
-        <div class="meta-row"><span class="meta-row-label">Started</span><span class="meta-row-value">${escapeHtml(formatDate(agent.startedAt))}</span></div>
-        <div class="meta-row"><span class="meta-row-label">Completed</span><span class="meta-row-value">${escapeHtml(formatDate(agent.completedAt))}</span></div>
-        ${agent.usage ? `<div class="meta-row"><span class="meta-row-label">Tokens</span><span class="meta-row-value">${escapeHtml(`${agent.usage.input_tokens} in / ${agent.usage.output_tokens} out / ${agent.usage.total_tokens} total`)}</span></div>` : ""}
-        ${agent.error ? `<div class="meta-row"><span class="meta-row-label">Error</span><span class="meta-row-value" style="color:var(--danger)">${escapeHtml(agent.error)}</span></div>` : ""}
+        <div class="meta-row"><span class="meta-row-label">Started</span><span class="meta-row-value">${escapeHtml(formatDate(run.startedAt))}</span></div>
+        <div class="meta-row"><span class="meta-row-label">Completed</span><span class="meta-row-value">${escapeHtml(formatDate(run.completedAt))}</span></div>
+        ${run.usage ? `<div class="meta-row"><span class="meta-row-label">Tokens</span><span class="meta-row-value">${escapeHtml(`${run.usage.input_tokens} in / ${run.usage.output_tokens} out / ${run.usage.total_tokens} total`)}</span></div>` : ""}
+        ${run.error ? `<div class="meta-row"><span class="meta-row-label">Error</span><span class="meta-row-value" style="color:var(--danger)">${escapeHtml(run.error)}</span></div>` : ""}
       </div>
       <div class="review-section">
         <div class="review-section-title">Prompt</div>
-        <pre class="code-block">${escapeHtml(agent.prompt)}</pre>
+        <pre class="code-block">${escapeHtml(run.prompt)}</pre>
       </div>
     </div>
   `;
 
   const responsePanel = `
     <div class="tab-panel${activeTab === "response" ? " is-active" : ""}" data-tab="response">
-      ${agent.finalResponse
-        ? `<div class="markdown-body">${renderMarkdown(agent.finalResponse)}</div>`
+      ${run.finalResponse
+        ? `<div class="markdown-body">${renderMarkdown(run.finalResponse)}</div>`
         : `<div class="text-muted text-sm">No final response captured yet.</div>`}
     </div>
   `;
 
-  const review = agent.review;
+  const review = run.review;
   const reviewContent = review ? `
     <div class="review-section">
       <div class="review-section-title">Git Status</div>
@@ -1070,15 +1070,15 @@ function renderAgentDetailTabs(agent) {
 
   const historyPanel = `
     <div class="tab-panel${activeTab === "history" ? " is-active" : ""}" data-tab="history">
-      ${agent.items.length
-        ? `<div class="timeline">${agent.items.map(renderHistoryItem).join("")}</div>`
+      ${run.items.length
+        ? `<div class="timeline">${run.items.map(renderHistoryItem).join("")}</div>`
         : `<div class="text-muted text-sm">No streamed history recorded yet.</div>`}
     </div>
   `;
 
   const logsPanel = `
     <div class="tab-panel${activeTab === "logs" ? " is-active" : ""}" data-tab="logs">
-      ${agent.logs.length ? agent.logs.map((entry) => `
+      ${run.logs.length ? run.logs.map((entry) => `
         <div class="log-entry">
           <div class="log-entry-header">
             <span class="log-level log-level-${escapeHtml(entry.level)}">${escapeHtml(entry.level.toUpperCase())}</span>
@@ -1091,11 +1091,11 @@ function renderAgentDetailTabs(agent) {
   `;
 
   return `
-    <div class="agent-detail">
-      <div class="agent-detail-header">
-        <div class="agent-detail-title">${escapeHtml(agent.title)}</div>
-        <div class="agent-detail-header-actions">
-          ${statusPill(agent.status)}
+    <div class="run-detail">
+      <div class="run-detail-header">
+        <div class="run-detail-title">${escapeHtml(run.title)}</div>
+        <div class="run-detail-header-actions">
+          ${statusPill(run.status)}
         </div>
       </div>
       <div class="tab-bar">
@@ -1112,57 +1112,57 @@ function renderAgentDetailTabs(agent) {
   `;
 }
 
-function renderRunDetail() {
-  const run = getSelectedRun();
-  if (!run) {
+function renderBatchDetail() {
+  const batch = getSelectedBatch();
+  if (!batch) {
     el.mainContent.innerHTML = `
       <div class="empty-state main-empty">
         <div class="empty-icon">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
         </div>
-        <p class="empty-title">No run selected</p>
-        <p class="empty-desc">Launch a run or select one from the sidebar to inspect agent output.</p>
+        <p class="empty-title">No batch selected</p>
+        <p class="empty-desc">Launch a batch or select one from the sidebar to inspect run output.</p>
       </div>
     `;
     return;
   }
 
-  if (!run.agents.find((a) => a.id === state.selectedAgentId)) {
-    state.selectedAgentId = run.agents[0]?.id || null;
+  if (!batch.runs.find((a) => a.id === state.selectedRunId)) {
+    state.selectedRunId = batch.runs[0]?.id || null;
   }
 
-  const selectedAgent = run.agents.find((a) => a.id === state.selectedAgentId) || null;
-  const canCancel = run.status === "running" || run.status === "queued";
-  const baseRef = run.config.baseRef || run.projectContext?.branchName || run.projectContext?.headSha || "Current HEAD";
+  const selectedRun = batch.runs.find((a) => a.id === state.selectedRunId) || null;
+  const canCancel = batch.status === "running" || batch.status === "queued";
+  const baseRef = batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "Current HEAD";
 
   el.mainContent.innerHTML = `
-    <div class="run-detail">
-      <div class="run-detail-header">
-        <div class="run-detail-title-area">
-          <h2>${escapeHtml(run.title)}</h2>
-          <div class="run-detail-meta">
-            <span class="meta-item">${icons.clock} Created ${escapeHtml(formatRelative(run.createdAt))}</span>
-            <span class="meta-item">${icons.folder} ${escapeHtml(run.config.projectPath)}</span>
+    <div class="batch-detail">
+      <div class="batch-detail-header">
+        <div class="batch-detail-title-area">
+          <h2>${escapeHtml(batch.title)}</h2>
+          <div class="batch-detail-meta">
+            <span class="meta-item">${icons.clock} Created ${escapeHtml(formatRelative(batch.createdAt))}</span>
+            <span class="meta-item">${icons.folder} ${escapeHtml(batch.config.projectPath)}</span>
           </div>
         </div>
-        <div class="run-detail-actions">
-          ${statusPill(run.status)}
-          ${canCancel ? `<button class="btn btn-danger btn-sm" type="button" data-action="cancel-run">${icons.x} Cancel</button>` : ""}
+        <div class="batch-detail-actions">
+          ${statusPill(batch.status)}
+          ${canCancel ? `<button class="btn btn-danger btn-sm" type="button" data-action="cancel-batch">${icons.x} Cancel</button>` : ""}
         </div>
       </div>
 
       <div class="info-cards">
         <div class="info-card">
           <div class="info-card-label">Mode</div>
-          <div class="info-card-value">${escapeHtml(formatModeLabel(run.mode))}</div>
+          <div class="info-card-value">${escapeHtml(formatModeLabel(batch.mode))}</div>
         </div>
         <div class="info-card">
-          <div class="info-card-label">Agents</div>
-          <div class="info-card-value">${run.agents.length} / ${escapeHtml(run.config.runCount)}</div>
+          <div class="info-card-label">Runs</div>
+          <div class="info-card-value">${batch.runs.length} / ${escapeHtml(batch.config.runCount)}</div>
         </div>
         <div class="info-card">
           <div class="info-card-label">Concurrency</div>
-          <div class="info-card-value">${escapeHtml(run.config.concurrency)}</div>
+          <div class="info-card-value">${escapeHtml(batch.config.concurrency)}</div>
         </div>
         <div class="info-card">
           <div class="info-card-label">Base Ref</div>
@@ -1170,35 +1170,35 @@ function renderRunDetail() {
         </div>
         <div class="info-card">
           <div class="info-card-label">Started</div>
-          <div class="info-card-value">${escapeHtml(formatDate(run.startedAt))}</div>
+          <div class="info-card-value">${escapeHtml(formatDate(batch.startedAt))}</div>
         </div>
         <div class="info-card">
           <div class="info-card-label">Completed</div>
-          <div class="info-card-value">${escapeHtml(formatDate(run.completedAt))}</div>
+          <div class="info-card-value">${escapeHtml(formatDate(batch.completedAt))}</div>
         </div>
         <div class="info-card">
           <div class="info-card-label">Sandbox</div>
-          <div class="info-card-value">${escapeHtml(run.config.sandboxMode)}</div>
+          <div class="info-card-value">${escapeHtml(batch.config.sandboxMode)}</div>
         </div>
       </div>
 
-      ${run.error ? `<div style="padding:10px 14px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);color:var(--danger);font-size:13px;margin-bottom:24px;">${escapeHtml(run.error)}</div>` : ""}
+      ${batch.error ? `<div style="padding:10px 14px;background:var(--danger-soft);border:1px solid rgba(239,68,68,0.25);border-radius:var(--radius-sm);color:var(--danger);font-size:13px;margin-bottom:24px;">${escapeHtml(batch.error)}</div>` : ""}
 
-      ${renderTasksSection(run.generation)}
+      ${renderTasksSection(batch.generation)}
 
-      <div class="agents-section">
+      <div class="runs-section">
         <div class="section-header">
-          <div class="section-title">Agents</div>
+          <div class="section-title">Runs</div>
           <span class="text-muted text-sm">${escapeHtml(summarizeProgress({
-            completedAgents: run.agents.filter((a) => a.status === "completed").length,
-            failedAgents: run.agents.filter((a) => a.status === "failed").length,
-            cancelledAgents: run.agents.filter((a) => a.status === "cancelled").length,
+            completedRuns: batch.runs.filter((a) => a.status === "completed").length,
+            failedRuns: batch.runs.filter((a) => a.status === "failed").length,
+            cancelledRuns: batch.runs.filter((a) => a.status === "cancelled").length,
           }))}</span>
         </div>
-        ${renderAgentCards(run)}
+        ${renderRunCards(batch)}
       </div>
 
-      ${renderAgentDetailTabs(selectedAgent)}
+      ${renderRunDetailTabs(selectedRun)}
     </div>
   `;
 }
@@ -1235,7 +1235,7 @@ function scheduleAutoInspect() {
 
 /* ─── Form ─── */
 function resetForm() {
-  el.runForm.reset();
+  el.batchForm.reset();
   el.runCount.value = state.config?.defaults.runCount ?? 10;
   el.concurrency.value = state.config?.defaults.runCount ?? 10;
   el.sandboxMode.value = state.config?.defaults.sandboxMode ?? "workspace-write";
@@ -1260,40 +1260,40 @@ async function loadConfig() {
   resetForm();
 }
 
-async function loadRuns() {
-  const payload = await fetchJson("/api/runs");
-  state.runs = payload.runs;
-  sortRuns();
-  await syncSelectedRun();
+async function loadBatches() {
+  const payload = await fetchJson("/api/batches");
+  state.batches = payload.batches;
+  sortBatches();
+  await syncSelectedBatch();
 }
 
-async function loadRunDetail(runId) {
+async function loadBatchDetail(batchId) {
   try {
-    const payload = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
-    state.runDetails.set(runId, payload.run);
-    upsertRunSummary({
-      id: payload.run.id,
-      mode: normalizeMode(payload.run.mode ?? payload.run.workflowType),
-      title: payload.run.title,
-      status: payload.run.status,
-      createdAt: payload.run.createdAt,
-      startedAt: payload.run.startedAt,
-      completedAt: payload.run.completedAt,
-      cancelRequested: payload.run.cancelRequested,
-      totalAgents: payload.run.agents.length,
-      completedAgents: payload.run.agents.filter((a) => a.status === "completed").length,
-      failedAgents: payload.run.agents.filter((a) => a.status === "failed").length,
-      cancelledAgents: payload.run.agents.filter((a) => a.status === "cancelled").length,
-      runningAgents: payload.run.agents.filter((a) => a.status === "running").length,
-      queuedAgents: payload.run.agents.filter((a) => a.status === "queued").length,
-      config: payload.run.config,
-      generation: payload.run.generation,
+    const payload = await fetchJson(`/api/batches/${encodeURIComponent(batchId)}`);
+    state.batchDetails.set(batchId, payload.batch);
+    upsertBatchSummary({
+      id: payload.batch.id,
+      mode: normalizeMode(payload.batch.mode ?? payload.batch.workflowType),
+      title: payload.batch.title,
+      status: payload.batch.status,
+      createdAt: payload.batch.createdAt,
+      startedAt: payload.batch.startedAt,
+      completedAt: payload.batch.completedAt,
+      cancelRequested: payload.batch.cancelRequested,
+      totalRuns: payload.batch.runs.length,
+      completedRuns: payload.batch.runs.filter((a) => a.status === "completed").length,
+      failedRuns: payload.batch.runs.filter((a) => a.status === "failed").length,
+      cancelledRuns: payload.batch.runs.filter((a) => a.status === "cancelled").length,
+      runningRuns: payload.batch.runs.filter((a) => a.status === "running").length,
+      queuedRuns: payload.batch.runs.filter((a) => a.status === "queued").length,
+      config: payload.batch.config,
+      generation: payload.batch.generation,
     });
-    renderRuns();
-    renderRunDetail();
+    renderBatches();
+    renderBatchDetail();
   } catch (error) {
-    if (error.message === "Run not found.") {
-      await removeRunFromState(runId);
+    if (error.message === "Batch not found.") {
+      await removeBatchFromState(batchId);
       return;
     }
     throw error;
@@ -1312,26 +1312,26 @@ function connectEvents() {
     el.connectionDot.className = "conn-dot is-connected";
   });
 
-  state.eventSource.addEventListener("runs.snapshot", async (event) => {
+  state.eventSource.addEventListener("batches.snapshot", async (event) => {
     const payload = JSON.parse(event.data);
-    state.runs = payload.runs;
-    sortRuns();
-    await syncSelectedRun();
+    state.batches = payload.batches;
+    sortBatches();
+    await syncSelectedBatch();
   });
 
-  state.eventSource.addEventListener("run.updated", async (event) => {
+  state.eventSource.addEventListener("batch.updated", async (event) => {
     const payload = JSON.parse(event.data);
-    upsertRunSummary(payload.summary);
-    state.runDetails.set(payload.run.id, payload.run);
-    if (!state.selectedRunId && getVisibleRuns()[0]) {
-      state.selectedRunId = getVisibleRuns()[0].id;
+    upsertBatchSummary(payload.summary);
+    state.batchDetails.set(payload.batch.id, payload.batch);
+    if (!state.selectedBatchId && getVisibleBatches()[0]) {
+      state.selectedBatchId = getVisibleBatches()[0].id;
     }
-    await syncSelectedRun();
+    await syncSelectedBatch();
   });
 
-  state.eventSource.addEventListener("run.deleted", async (event) => {
+  state.eventSource.addEventListener("batch.deleted", async (event) => {
     const payload = JSON.parse(event.data);
-    await removeRunFromState(payload.runId);
+    await removeBatchFromState(payload.batchId);
   });
 
   state.eventSource.addEventListener("error", () => {
@@ -1367,7 +1367,7 @@ async function inspectProject() {
   updateSubmitButtonState();
 }
 
-async function submitRun(event) {
+async function submitBatch(event) {
   event.preventDefault();
   el.submitButton.disabled = true;
   el.submitButton.textContent = "Starting\u2026";
@@ -1390,48 +1390,48 @@ async function submitRun(event) {
       webSearchMode: el.webSearchMode.checked ? "live" : "disabled",
     };
 
-    const response = await fetchJson("/api/runs", {
+    const response = await fetchJson("/api/batches", {
       method: "POST",
       body: JSON.stringify(payload),
     });
 
-    state.selectedRunId = response.run.id;
-    state.selectedAgentId = null;
-    if (state.projectFilters.length > 0 && !state.projectFilters.includes(response.run.config.projectPath)) {
-      state.projectFilters = [...state.projectFilters, response.run.config.projectPath];
+    state.selectedBatchId = response.batch.id;
+    state.selectedRunId = null;
+    if (state.projectFilters.length > 0 && !state.projectFilters.includes(response.batch.config.projectPath)) {
+      state.projectFilters = [...state.projectFilters, response.batch.config.projectPath];
     }
-    state.runDetails.set(response.run.id, response.run);
-    await loadRunDetail(response.run.id);
+    state.batchDetails.set(response.batch.id, response.batch);
+    await loadBatchDetail(response.batch.id);
     closeDrawer();
-    showToast("success", "Run started", `${response.run.title} is now running.`);
+    showToast("success", "Batch started", `${response.batch.title} is now running.`);
   } catch (error) {
-    showToast("error", "Failed to start run", error.message);
+    showToast("error", "Failed to start batch", error.message);
   } finally {
     el.submitButton.disabled = false;
-    el.submitButton.innerHTML = `${icons.play} Start Run`;
+    el.submitButton.innerHTML = `${icons.play} Start Batch`;
   }
 }
 
-async function cancelSelectedRun() {
-  if (!state.selectedRunId) return;
+async function cancelSelectedBatch() {
+  if (!state.selectedBatchId) return;
   try {
-    await fetchJson(`/api/runs/${encodeURIComponent(state.selectedRunId)}/cancel`, { method: "POST" });
-    showToast("info", "Cancel requested", "The run will stop after current agents finish.");
+    await fetchJson(`/api/batches/${encodeURIComponent(state.selectedBatchId)}/cancel`, { method: "POST" });
+    showToast("info", "Cancel requested", "The batch will stop after current runs finish.");
   } catch (error) {
     showToast("error", "Cancel failed", error.message);
   }
 }
 
-async function deleteRunById(runId) {
-  const run = state.runs.find((entry) => entry.id === runId);
-  if (!run) {
+async function deleteBatchById(batchId) {
+  const batch = state.batches.find((entry) => entry.id === batchId);
+  if (!batch) {
     return;
   }
 
   const confirmed = window.confirm(
-    run.status === "running" || run.status === "queued"
-      ? `Remove "${run.title}"? Active agents will be cancelled.`
-      : `Remove "${run.title}"?`,
+    batch.status === "running" || batch.status === "queued"
+      ? `Remove "${batch.title}"? Active runs will be cancelled.`
+      : `Remove "${batch.title}"?`,
   );
 
   if (!confirmed) {
@@ -1439,27 +1439,27 @@ async function deleteRunById(runId) {
   }
 
   try {
-    await fetchJson(`/api/runs/${encodeURIComponent(runId)}`, { method: "DELETE" });
-    await removeRunFromState(runId);
-    showToast("success", "Run removed", run.title);
+    await fetchJson(`/api/batches/${encodeURIComponent(batchId)}`, { method: "DELETE" });
+    await removeBatchFromState(batchId);
+    showToast("success", "Batch removed", batch.title);
   } catch (error) {
     showToast("error", "Remove failed", error.message);
   }
 }
 
-async function refreshAgentReview() {
-  const run = getSelectedRun();
-  if (!run || !state.selectedAgentId) return;
-  const agent = run.agents.find((a) => a.id === state.selectedAgentId);
-  if (!agent) return;
+async function refreshRunReview() {
+  const batch = getSelectedBatch();
+  if (!batch || !state.selectedRunId) return;
+  const run = batch.runs.find((a) => a.id === state.selectedRunId);
+  if (!run) return;
   try {
     const payload = await fetchJson(
-      `/api/runs/${encodeURIComponent(run.id)}/agents/${encodeURIComponent(agent.id)}/review`,
+      `/api/batches/${encodeURIComponent(batch.id)}/runs/${encodeURIComponent(run.id)}/review`,
     );
-    const mutableRun = state.runDetails.get(run.id);
-    const mutableAgent = mutableRun?.agents.find((a) => a.id === agent.id);
-    if (mutableAgent) mutableAgent.review = payload.review;
-    renderRunDetail();
+    const mutableBatch = state.batchDetails.get(batch.id);
+    const mutableRun = mutableBatch?.runs.find((a) => a.id === run.id);
+    if (mutableRun) mutableRun.review = payload.review;
+    renderBatchDetail();
     showToast("success", "Review refreshed", "Git review data updated.");
   } catch (error) {
     showToast("error", "Review failed", error.message);
@@ -1497,7 +1497,7 @@ function bindEvents() {
     seg.addEventListener("click", () => setMode(seg.dataset.mode));
   }
 
-  el.newRunButton.addEventListener("click", openDrawer);
+  el.newBatchButton.addEventListener("click", openDrawer);
   el.closeDrawerButton.addEventListener("click", closeDrawer);
   el.drawerOverlay.addEventListener("click", closeDrawer);
 
@@ -1556,25 +1556,25 @@ function bindEvents() {
     el.model.focus();
   });
 
-  el.runForm.addEventListener("submit", submitRun);
+  el.batchForm.addEventListener("submit", submitBatch);
   el.resetFormButton.addEventListener("click", resetForm);
   el.inspectProjectButton.addEventListener("click", inspectProject);
   el.browseProjectButton.addEventListener("click", () => openBrowser(el.projectPath, "Choose Project Folder"));
   el.browseWorktreeButton.addEventListener("click", () => openBrowser(el.worktreeRoot, "Choose Worktree Root"));
 
-  el.runsList.addEventListener("click", async (event) => {
-    const deleteButton = event.target.closest('[data-action="delete-run"]');
+  el.batchesList.addEventListener("click", async (event) => {
+    const deleteButton = event.target.closest('[data-action="delete-batch"]');
     if (deleteButton) {
-      await deleteRunById(deleteButton.dataset.runId);
+      await deleteBatchById(deleteButton.dataset.batchId);
       return;
     }
 
-    const card = event.target.closest(".run-card[data-run-id]");
+    const card = event.target.closest(".batch-card[data-batch-id]");
     if (!card) return;
-    state.selectedRunId = card.dataset.runId;
-    state.selectedAgentId = null;
+    state.selectedBatchId = card.dataset.batchId;
+    state.selectedRunId = null;
     state.activeTab = "overview";
-    await loadRunDetail(state.selectedRunId);
+    await loadBatchDetail(state.selectedBatchId);
   });
 
   el.projectFilters.addEventListener("click", async (event) => {
@@ -1590,15 +1590,15 @@ function bindEvents() {
       state.projectFilters = [...state.projectFilters, projectPath];
     }
 
-    await syncSelectedRun();
+    await syncSelectedBatch();
   });
 
   el.mainContent.addEventListener("click", async (event) => {
-    const agentCard = event.target.closest("[data-agent-id]");
-    if (agentCard) {
-      state.selectedAgentId = agentCard.dataset.agentId;
+    const runCard = event.target.closest("[data-run-id]");
+    if (runCard) {
+      state.selectedRunId = runCard.dataset.runId;
       state.activeTab = "overview";
-      renderRunDetail();
+      renderBatchDetail();
       return;
     }
 
@@ -1612,8 +1612,8 @@ function bindEvents() {
 
     const action = event.target.closest("[data-action]")?.dataset.action;
     if (!action) return;
-    if (action === "cancel-run") await cancelSelectedRun();
-    if (action === "refresh-review") await refreshAgentReview();
+    if (action === "cancel-batch") await cancelSelectedBatch();
+    if (action === "refresh-review") await refreshRunReview();
   });
 
   el.browserList.addEventListener("click", async (event) => {
@@ -1663,7 +1663,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   await loadConfig();
-  await loadRuns();
+  await loadBatches();
   connectEvents();
 }
 

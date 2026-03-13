@@ -103,12 +103,12 @@ export async function createWorktree({
   baseRef,
   branchName,
   headSha,
-  agentIndex,
+  runIndex,
 }) {
   const resolvedRoot = await ensureDirectory(worktreeRoot);
   const projectSegment = deriveWorktreeProjectSegment(projectPath);
   const refSegment = deriveWorktreeRefSegment({ baseRef, branchName, headSha });
-  const baseName = `${projectSegment}-${refSegment}-${String(agentIndex + 1).padStart(2, "0")}`;
+  const baseName = `${projectSegment}-${refSegment}-${String(runIndex + 1).padStart(2, "0")}`;
 
   let attempt = 0;
   let candidate = path.join(resolvedRoot, baseName);

@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { createCodexModelCatalog } from "./lib/codexModels.js";
 import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git.js";
-import { createRunStore } from "./lib/runStore.js";
-import { cancelRun, deleteRun, generateRunTitle, runMode } from "./lib/runner.js";
+import { createBatchStore } from "./lib/batchStore.js";
+import { cancelBatch, deleteBatch, generateBatchTitle, executeBatch } from "./lib/runner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -16,7 +16,7 @@ const publicDirectory = path.join(projectRoot, "public");
 const dataDirectory = path.join(projectRoot, "data");
 const port = Number(process.env.PORT || 3000);
 
-const store = createRunStore(dataDirectory);
+const store = createBatchStore(dataDirectory);
 const modelCatalog = createCodexModelCatalog();
 
 const mimeTypes = {
@@ -108,13 +108,13 @@ function getProjectFolderLabel(projectPath) {
   return segments.at(-1) || normalizedPath;
 }
 
-function buildFallbackRunTitle({ mode, runCount, projectPath }) {
+function buildFallbackBatchTitle({ mode, runCount, projectPath }) {
   const projectLabel = getProjectFolderLabel(projectPath);
   const modeLabel = mode === "generated" ? "Generated" : "Repeated";
   return projectLabel ? `${projectLabel} - ${modeLabel} x${runCount}` : `${modeLabel} x${runCount}`;
 }
 
-function normalizeCreateRunPayload(body) {
+function normalizeCreateBatchPayload(body) {
   const mode = normalizeMode(body.mode ?? body.workflowType);
   const runCount = normalizeInteger(body.runCount, 10, 1, 50);
   const concurrency = normalizeInteger(body.concurrency, runCount, 1, runCount);
@@ -143,7 +143,7 @@ function normalizeCreateRunPayload(body) {
 
   return {
     mode,
-    title: requestedTitle || buildFallbackRunTitle({ mode, runCount, projectPath: resolvedProjectPath }),
+    title: requestedTitle || buildFallbackBatchTitle({ mode, runCount, projectPath: resolvedProjectPath }),
     autoGenerateTitle: !requestedTitle,
     config: {
       runCount,
@@ -214,8 +214,8 @@ async function handleApi(request, response, url) {
     return;
   }
 
-  if (request.method === "GET" && url.pathname === "/api/runs") {
-    sendJson(response, 200, { runs: store.listSummaries() });
+  if (request.method === "GET" && url.pathname === "/api/batches") {
+    sendJson(response, 200, { batches: store.listSummaries() });
     return;
   }
 
@@ -235,22 +235,22 @@ async function handleApi(request, response, url) {
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/api/runs") {
+  if (request.method === "POST" && url.pathname === "/api/batches") {
     const body = await readBody(request);
-    const payload = normalizeCreateRunPayload(body);
-    const run = store.createRun(payload);
+    const payload = normalizeCreateBatchPayload(body);
+    const batch = store.createBatch(payload);
 
     if (payload.autoGenerateTitle) {
-      void generateRunTitle(store, run.id).catch((error) => {
-        console.error(`Run ${run.id} title generation failed`, error);
+      void generateBatchTitle(store, batch.id).catch((error) => {
+        console.error(`Batch ${batch.id} title generation failed`, error);
       });
     }
 
-    void runMode(store, run.id).catch((error) => {
-      console.error(`Run ${run.id} failed`, error);
+    void executeBatch(store, batch.id).catch((error) => {
+      console.error(`Batch ${batch.id} failed`, error);
     });
 
-    sendJson(response, 202, { run: store.getRun(run.id) });
+    sendJson(response, 202, { batch: store.getBatch(batch.id) });
     return;
   }
 
@@ -293,63 +293,63 @@ async function handleApi(request, response, url) {
     return;
   }
 
-  const runIdMatch = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
-  if (request.method === "GET" && runIdMatch) {
-    const run = store.getRun(decodeURIComponent(runIdMatch[1]));
-    if (!run) {
-      sendError(response, 404, "Run not found.");
+  const batchIdMatch = url.pathname.match(/^\/api\/batches\/([^/]+)$/);
+  if (request.method === "GET" && batchIdMatch) {
+    const batch = store.getBatch(decodeURIComponent(batchIdMatch[1]));
+    if (!batch) {
+      sendError(response, 404, "Batch not found.");
       return;
     }
-    sendJson(response, 200, { run });
+    sendJson(response, 200, { batch });
     return;
   }
 
-  if (request.method === "DELETE" && runIdMatch) {
-    const run = deleteRun(store, decodeURIComponent(runIdMatch[1]));
-    if (!run) {
-      sendError(response, 404, "Run not found.");
+  if (request.method === "DELETE" && batchIdMatch) {
+    const batch = deleteBatch(store, decodeURIComponent(batchIdMatch[1]));
+    if (!batch) {
+      sendError(response, 404, "Batch not found.");
       return;
     }
-    sendJson(response, 200, { run });
+    sendJson(response, 200, { batch });
     return;
   }
 
-  const cancelMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+  const cancelMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/cancel$/);
   if (request.method === "POST" && cancelMatch) {
-    const run = cancelRun(store, decodeURIComponent(cancelMatch[1]));
-    if (!run) {
-      sendError(response, 404, "Run not found.");
+    const batch = cancelBatch(store, decodeURIComponent(cancelMatch[1]));
+    if (!batch) {
+      sendError(response, 404, "Batch not found.");
       return;
     }
-    sendJson(response, 202, { run });
+    sendJson(response, 202, { batch });
     return;
   }
 
-  const reviewMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/agents\/([^/]+)\/review$/);
+  const reviewMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/runs\/([^/]+)\/review$/);
   if (request.method === "GET" && reviewMatch) {
-    const runId = decodeURIComponent(reviewMatch[1]);
-    const agentId = decodeURIComponent(reviewMatch[2]);
-    const run = store.getRun(runId);
+    const batchId = decodeURIComponent(reviewMatch[1]);
+    const runId = decodeURIComponent(reviewMatch[2]);
+    const batch = store.getBatch(batchId);
 
+    if (!batch) {
+      sendError(response, 404, "Batch not found.");
+      return;
+    }
+
+    const run = batch.runs.find((entry) => entry.id === runId);
     if (!run) {
       sendError(response, 404, "Run not found.");
       return;
     }
 
-    const agent = run.agents.find((entry) => entry.id === agentId);
-    if (!agent) {
-      sendError(response, 404, "Agent not found.");
+    if (!run.worktreePath) {
+      sendJson(response, 200, { review: run.review });
       return;
     }
 
-    if (!agent.worktreePath) {
-      sendJson(response, 200, { review: agent.review });
-      return;
-    }
-
-    const review = await collectWorktreeReview(agent.worktreePath);
-    store.updateAgent(runId, agentId, (mutableAgent) => {
-      mutableAgent.review = review;
+    const review = await collectWorktreeReview(run.worktreePath);
+    store.updateRun(batchId, runId, (mutableRun) => {
+      mutableRun.review = review;
     });
     sendJson(response, 200, { review });
     return;
