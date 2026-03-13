@@ -20,7 +20,7 @@ import { ModelPicker } from "./ModelPicker.js";
 import { FolderBrowser, openBrowser } from "./FolderBrowser.js";
 import { modelCatalog } from "../state/store.js";
 import { PlayIcon } from "../icons.js";
-import type { CodexModel } from "../types.js";
+import type { CodexModel, ProjectContext } from "../types.js";
 
 function getDefaultCatalogModel() {
   return modelCatalog.value.models.find((m) => m.isDefault) ?? null;
@@ -30,6 +30,12 @@ function findCatalogModelByValue(value: string): CodexModel | null {
   const target = String(value ?? "").trim();
   if (!target) return null;
   return modelCatalog.value.models.find((m) => m.model === target) ?? null;
+}
+
+function resolveDefaultBaseRef(project: ProjectContext | null | undefined): string {
+  const branchName = project?.branchName?.trim();
+  if (branchName) return branchName;
+  return project?.headSha?.trim() || "";
 }
 
 function closeDrawer() {
@@ -115,17 +121,21 @@ export function NewBatchDrawer() {
   async function doInspect(path: string) {
     if (!path) {
       projectInspect.value = null;
+      setBaseRef("");
       setInspectStatus("");
       return;
     }
     setInspectStatus("Inspecting\u2026");
     try {
       const payload = await apiInspectProject(path);
-      projectInspect.value = payload.projectContext;
-      updateWorktreeRoot(deriveParentPath(payload.projectContext.projectPath));
+      const context = payload.projectContext;
+      projectInspect.value = context;
+      setBaseRef(resolveDefaultBaseRef(context));
+      updateWorktreeRoot(deriveParentPath(context.projectPath));
       setInspectStatus("Git project ready.");
     } catch (err) {
       projectInspect.value = null;
+      setBaseRef("");
       setInspectStatus((err as Error).message);
     }
   }
@@ -142,6 +152,7 @@ export function NewBatchDrawer() {
   function handleProjectPathChange(value: string) {
     setProjectPath(value);
     projectInspect.value = null;
+    setBaseRef("");
     setInspectStatus("");
     updateWorktreeRoot(deriveParentPath(value));
     scheduleAutoInspect(value);
@@ -157,6 +168,12 @@ export function NewBatchDrawer() {
       )
     : null;
   const defaultEffort = resolvedModel?.defaultReasoningEffort;
+  const baseRefOptions: Array<{ value: string; label: string }> = [];
+  const branchName = inspect?.branchName?.trim();
+  const headSha = inspect?.headSha?.trim();
+  if (branchName) baseRefOptions.push({ value: branchName, label: `${branchName} (branch)` });
+  if (headSha) baseRefOptions.push({ value: headSha, label: `${headSha} (HEAD)` });
+  if (baseRefOptions.length === 0) baseRefOptions.push({ value: "", label: "Current HEAD" });
 
   const canSubmit =
     projectPath.trim().length > 0 &&
@@ -317,6 +334,23 @@ export function NewBatchDrawer() {
             )}
           </div>
 
+          {/* Base Ref */}
+          <div class="form-section">
+            <label class="form-label" for="baseRef">Base Ref</label>
+            <select
+              id="baseRef"
+              name="baseRef"
+              value={baseRef}
+              onChange={(e) => setBaseRef((e.target as HTMLSelectElement).value)}
+            >
+              {baseRefOptions.map((option) => (
+                <option key={option.value || "head"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Worktree Root */}
           <div class="form-section">
             <label class="form-label" for="worktreeRoot">Worktree Root</label>
@@ -411,16 +445,6 @@ export function NewBatchDrawer() {
           </div>
 
           <div class="form-grid-2">
-            <div class="form-section">
-              <label class="form-label" for="baseRef">Base Ref</label>
-              <input
-                id="baseRef"
-                name="baseRef"
-                value={baseRef}
-                placeholder="Current HEAD"
-                onInput={(e) => setBaseRef((e.target as HTMLInputElement).value)}
-              />
-            </div>
             <div class="form-section">
               <label class="form-label" for="model">Model</label>
               <ModelPicker value={model} onChange={setModel} />
