@@ -36,50 +36,41 @@ function truncateText(value: string, limit: number = MAX_UNTRACKED_PREVIEW_BYTES
   return `${value.slice(0, limit)}\n\n...truncated...`;
 }
 
-function isCommitLikeRef(value: string): boolean {
-  return /^[0-9a-f]{5,40}$/i.test(String(value).trim());
-}
-
-function normalizeRefName(value: string): string {
-  const ref = String(value).trim();
-
-  if (ref.startsWith("refs/heads/")) {
-    return ref.slice("refs/heads/".length);
-  }
-
-  if (ref.startsWith("refs/remotes/")) {
-    return ref.slice("refs/remotes/".length);
-  }
-
-  if (ref.startsWith("refs/tags/")) {
-    return ref.slice("refs/tags/".length);
-  }
-
-  return ref;
-}
-
-interface WorktreeRefInput {
-  baseRef?: string;
-  branchName?: string;
-  headSha: string;
-}
-
-function deriveWorktreeRefSegment({ baseRef, branchName, headSha }: WorktreeRefInput): string {
-  if (baseRef) {
-    return isCommitLikeRef(baseRef)
-      ? baseRef.slice(0, 5).toLowerCase()
-      : sanitizeSegment(normalizeRefName(baseRef));
-  }
-
-  if (branchName) {
-    return sanitizeSegment(branchName);
-  }
-
-  return headSha.slice(0, 5).toLowerCase();
-}
-
 function deriveWorktreeProjectSegment(projectPath: string): string {
   return sanitizeSegment(path.basename(projectPath));
+}
+
+function deriveWorktreeBranchSegment(branchName: string, headSha: string): string {
+  const normalizedBranch = String(branchName ?? "").trim();
+  if (normalizedBranch) {
+    return sanitizeSegment(normalizedBranch);
+  }
+
+  const shortHead = String(headSha ?? "").trim().slice(0, 7);
+  return sanitizeSegment(`detached-${shortHead || "head"}`);
+}
+
+export interface WorktreeBaseNameInput {
+  projectPath: string;
+  branchName: string;
+  headSha: string;
+  batchId: string;
+  runIndex: number;
+}
+
+export function buildWorktreeBaseName({
+  projectPath,
+  branchName,
+  headSha,
+  batchId,
+  runIndex,
+}: WorktreeBaseNameInput): string {
+  const projectSegment = deriveWorktreeProjectSegment(projectPath);
+  const branchSegment = deriveWorktreeBranchSegment(branchName, headSha);
+  const batchSegment = sanitizeSegment(batchId);
+  const runIndexSegment = sanitizeSegment(String(runIndex + 1));
+
+  return `${projectSegment}-${branchSegment}-${batchSegment}-${runIndexSegment}`;
 }
 
 export async function inspectProject(projectPath: string): Promise<ProjectContext> {
@@ -119,6 +110,7 @@ export interface CreateWorktreeOptions {
   baseRef: string;
   branchName: string;
   headSha: string;
+  batchId: string;
   runIndex: number;
 }
 
@@ -129,12 +121,17 @@ export async function createWorktree({
   baseRef,
   branchName,
   headSha,
+  batchId,
   runIndex,
 }: CreateWorktreeOptions): Promise<string> {
   const resolvedRoot = await ensureDirectory(worktreeRoot);
-  const projectSegment = deriveWorktreeProjectSegment(projectPath);
-  const refSegment = deriveWorktreeRefSegment({ baseRef, branchName, headSha });
-  const baseName = `${projectSegment}-${refSegment}-${String(runIndex + 1).padStart(2, "0")}`;
+  const baseName = buildWorktreeBaseName({
+    projectPath,
+    branchName,
+    headSha,
+    batchId,
+    runIndex,
+  });
 
   let attempt = 0;
   let candidate = path.join(resolvedRoot, baseName);

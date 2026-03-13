@@ -80,5 +80,5 @@ data/batches/<batchId>/runs/<runId>.json # Individual run data
 
 - Worktrees are **not deleted automatically** after a batch completes. Clean them up manually or reuse the worktree root across batches.
 - If you select a subdirectory rather than the repo root, each run still gets a full worktree but runs from the matching subdirectory within it.
-- Worktree folders are named `<project>-<ref>-<index>` (e.g. `my-app-main-3`).
+- Worktree folders are named `<project>-<branch>-<batch-id>-<run-index>` (e.g. `my-app-main-batch-42-3`).
 - You can cancel a running batch at any time; runs that have already completed keep their results.

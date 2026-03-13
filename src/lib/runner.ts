@@ -593,6 +593,7 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
       baseRef,
       branchName: projectContext.branchName,
       headSha: projectContext.headSha,
+      batchId,
       runIndex: runSnapshot.index,
     });
 
