@@ -1,72 +1,28 @@
-import { signal, computed } from "@preact/signals";
-import type { AppConfig, BatchSummary, Batch, ProjectContext, CodexModel } from "../types.js";
+import { create } from "zustand";
+import type { AppConfig, BatchSummary, Batch, ProjectContext, CodexModel, WorktreeInspection } from "../types.js";
 import { getProjectPath, getPathLeaf } from "../utils/paths.js";
 import { normalizeMode } from "../utils/format.js";
 
-// --- Connection ---
+// --- Types ---
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
-export const connectionStatus = signal<ConnectionStatus>("connecting");
 
-// --- Config ---
-export const config = signal<AppConfig | null>(null);
-
-// --- Batches ---
-export const batches = signal<BatchSummary[]>([]);
-export const batchDetails = signal<Map<string, Batch>>(new Map());
-
-// --- Selection ---
-export const selectedBatchId = signal<string | null>(null);
-export const selectedRunId = signal<string | null>(null);
-export const activeTab = signal<string>("overview");
-
-// --- Drawer ---
-export const drawerOpen = signal(false);
-
-// --- Model ---
-export const modelMenuOpen = signal(false);
-
-// --- Project Filters ---
-export const projectFilters = signal<string[]>([]);
-
-// --- Project Inspect (in drawer) ---
-export const projectInspect = signal<ProjectContext | null>(null);
-
-// --- Browser state ---
 export interface BrowserState {
   target: "project" | "worktree" | null;
   currentPath: string;
   parentPath: string | null;
   directories: { name: string; path: string }[];
 }
-export const browserState = signal<BrowserState>({
-  target: null,
-  currentPath: "",
-  parentPath: null,
-  directories: [],
-});
-export const browserDialogOpen = signal(false);
 
-// --- Delete Dialog ---
 export interface DeleteDialogState {
   batchId: string | null;
   removeWorktrees: boolean;
-  preview: { worktreeCount: number; worktrees: import("../types.js").WorktreeInspection[] } | null;
+  preview: { worktreeCount: number; worktrees: WorktreeInspection[] } | null;
   loading: boolean;
   error: string;
   submitting: boolean;
   requestId: number;
 }
-export const deleteDialog = signal<DeleteDialogState>({
-  batchId: null,
-  removeWorktrees: false,
-  preview: null,
-  loading: false,
-  error: "",
-  submitting: false,
-  requestId: 0,
-});
 
-// --- Model Catalog ---
 export interface ModelCatalogState {
   loading: boolean;
   loaded: boolean;
@@ -75,43 +31,45 @@ export interface ModelCatalogState {
   models: CodexModel[];
   error: string;
 }
-export const modelCatalog = signal<ModelCatalogState>({
-  loading: false,
-  loaded: false,
-  stale: false,
-  fetchedAt: null,
-  models: [],
-  error: "",
-});
 
-// --- Toasts ---
 export interface Toast {
   id: string;
   type: "success" | "error" | "info";
   title: string;
   message?: string;
 }
-export const toasts = signal<Toast[]>([]);
 
-let toastCounter = 0;
-export function addToast(type: Toast["type"], title: string, message?: string) {
-  const id = String(++toastCounter);
-  toasts.value = [...toasts.value, { id, type, title, message }];
-  return id;
+interface AppState {
+  connectionStatus: ConnectionStatus;
+  config: AppConfig | null;
+  batches: BatchSummary[];
+  batchDetails: Map<string, Batch>;
+  selectedBatchId: string | null;
+  selectedRunId: string | null;
+  activeTab: string;
+  drawerOpen: boolean;
+  modelMenuOpen: boolean;
+  projectFilters: string[];
+  projectInspect: ProjectContext | null;
+  browserState: BrowserState;
+  browserDialogOpen: boolean;
+  deleteDialog: DeleteDialogState;
+  modelCatalog: ModelCatalogState;
+  toasts: Toast[];
+
+  addToast: (type: Toast["type"], title: string, message?: string) => string;
+  removeToast: (id: string) => void;
+  sortBatches: (list: BatchSummary[]) => BatchSummary[];
+  upsertBatchSummary: (summary: BatchSummary) => void;
+  removeBatchFromState: (batchId: string) => void;
+  setBatchDetail: (batch: Batch) => void;
+  normalizeProjectFilters: () => ReturnType<typeof getProjectFilterOptions>;
+  syncSelectedBatch: () => void;
 }
-export function removeToast(id: string) {
-  toasts.value = toasts.value.filter((t) => t.id !== id);
-}
 
-// --- Computed ---
-export const selectedBatch = computed(() => {
-  const id = selectedBatchId.value;
-  return id ? batchDetails.value.get(id) ?? null : null;
-});
-
-export function getProjectFilterOptions() {
+export function getProjectFilterOptions(batches: BatchSummary[]) {
   const projectPaths = Array.from(
-    new Set(batches.value.map(getProjectPath).filter(Boolean)),
+    new Set(batches.map(getProjectPath).filter(Boolean)),
   ).sort((left, right) => {
     const byLeaf = getPathLeaf(left).localeCompare(getPathLeaf(right));
     return byLeaf || left.localeCompare(right);
@@ -132,95 +90,143 @@ export function getProjectFilterOptions() {
   });
 }
 
-export const visibleBatches = computed(() => {
-  const filters = projectFilters.value;
-  if (filters.length === 0) return batches.value;
-  const activeSet = new Set(filters);
-  return batches.value.filter((b) => activeSet.has(getProjectPath(b)));
-});
+export const selectSelectedBatch = (s: AppState) =>
+  s.selectedBatchId ? s.batchDetails.get(s.selectedBatchId) ?? null : null;
 
-export function sortBatches(list: BatchSummary[]): BatchSummary[] {
-  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
+export const selectVisibleBatches = (s: AppState) => {
+  if (s.projectFilters.length === 0) return s.batches;
+  const activeSet = new Set(s.projectFilters);
+  return s.batches.filter((b) => activeSet.has(getProjectPath(b)));
+};
 
-export function upsertBatchSummary(summary: BatchSummary) {
-  const current = batches.value;
-  const idx = current.findIndex((r) => r.id === summary.id);
-  let next: BatchSummary[];
-  if (idx >= 0) {
-    next = [...current];
-    next[idx] = summary;
-  } else {
-    next = [...current, summary];
-  }
-  batches.value = sortBatches(next);
-}
+let toastCounter = 0;
 
-export function normalizeProjectFilters() {
-  const options = getProjectFilterOptions();
-  const optionValues = new Set(options.map((o) => o.value));
-  const normalized = Array.from(new Set(projectFilters.value)).filter((v) => optionValues.has(v));
-  if (normalized.length !== projectFilters.value.length || normalized.some((v, i) => v !== projectFilters.value[i])) {
-    projectFilters.value = normalized;
-  }
-  return options;
-}
+export const useAppStore = create<AppState>((set, get) => ({
+  connectionStatus: "connecting",
+  config: null,
+  batches: [],
+  batchDetails: new Map(),
+  selectedBatchId: null,
+  selectedRunId: null,
+  activeTab: "overview",
+  drawerOpen: false,
+  modelMenuOpen: false,
+  projectFilters: [],
+  projectInspect: null,
+  browserState: {
+    target: null,
+    currentPath: "",
+    parentPath: null,
+    directories: [],
+  },
+  browserDialogOpen: false,
+  deleteDialog: {
+    batchId: null,
+    removeWorktrees: false,
+    preview: null,
+    loading: false,
+    error: "",
+    submitting: false,
+    requestId: 0,
+  },
+  modelCatalog: {
+    loading: false,
+    loaded: false,
+    stale: false,
+    fetchedAt: null,
+    models: [],
+    error: "",
+  },
+  toasts: [],
 
-export function syncSelectedBatch() {
-  normalizeProjectFilters();
-  const visible = visibleBatches.value;
-  const isVisible = visible.some((b) => b.id === selectedBatchId.value);
-  if (!isVisible) {
-    selectedBatchId.value = visible[0]?.id ?? null;
-    selectedRunId.value = null;
-    activeTab.value = "overview";
-  }
-}
+  addToast: (type, title, message) => {
+    const id = String(++toastCounter);
+    set((s) => ({ toasts: [...s.toasts, { id, type, title, message }] }));
+    return id;
+  },
 
-export function removeBatchFromState(batchId: string) {
-  batches.value = batches.value.filter((b) => b.id !== batchId);
-  const newMap = new Map(batchDetails.value);
-  newMap.delete(batchId);
-  batchDetails.value = newMap;
+  removeToast: (id) => {
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+  },
 
-  if (selectedBatchId.value === batchId) {
-    selectedBatchId.value = null;
-    selectedRunId.value = null;
-    activeTab.value = "overview";
-  }
+  sortBatches: (list) => [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
 
-  if (deleteDialog.value.batchId === batchId) {
-    deleteDialog.value = {
-      ...deleteDialog.value,
-      batchId: null,
-    };
-  }
+  upsertBatchSummary: (summary) => {
+    const { batches, sortBatches } = get();
+    const idx = batches.findIndex((r) => r.id === summary.id);
+    let next: BatchSummary[];
+    if (idx >= 0) {
+      next = [...batches];
+      next[idx] = summary;
+    } else {
+      next = [...batches, summary];
+    }
+    set({ batches: sortBatches(next) });
+  },
 
-  syncSelectedBatch();
-}
+  removeBatchFromState: (batchId) => {
+    const state = get();
+    const newMap = new Map(state.batchDetails);
+    newMap.delete(batchId);
+    set({
+      batches: state.batches.filter((b) => b.id !== batchId),
+      batchDetails: newMap,
+      ...(state.selectedBatchId === batchId
+        ? { selectedBatchId: null, selectedRunId: null, activeTab: "overview" }
+        : {}),
+      ...(state.deleteDialog.batchId === batchId
+        ? { deleteDialog: { ...state.deleteDialog, batchId: null } }
+        : {}),
+    });
+    get().syncSelectedBatch();
+  },
 
-export function setBatchDetail(batch: Batch) {
-  const newMap = new Map(batchDetails.value);
-  newMap.set(batch.id, batch);
-  batchDetails.value = newMap;
+  setBatchDetail: (batch) => {
+    const { batchDetails, upsertBatchSummary } = get();
+    const newMap = new Map(batchDetails);
+    newMap.set(batch.id, batch);
+    set({ batchDetails: newMap });
+    upsertBatchSummary({
+      id: batch.id,
+      mode: normalizeMode(batch.mode),
+      title: batch.title,
+      status: batch.status,
+      createdAt: batch.createdAt,
+      startedAt: batch.startedAt,
+      completedAt: batch.completedAt,
+      cancelRequested: batch.cancelRequested,
+      totalRuns: batch.runs.length,
+      completedRuns: batch.runs.filter((r) => r.status === "completed").length,
+      failedRuns: batch.runs.filter((r) => r.status === "failed").length,
+      cancelledRuns: batch.runs.filter((r) => r.status === "cancelled").length,
+      runningRuns: batch.runs.filter((r) => r.status === "running").length,
+      queuedRuns: batch.runs.filter((r) => r.status === "queued").length,
+      config: batch.config,
+      generation: batch.generation,
+    });
+  },
 
-  // Also update summary
-  upsertBatchSummary({
-    id: batch.id,
-    mode: normalizeMode(batch.mode),
-    title: batch.title,
-    status: batch.status,
-    createdAt: batch.createdAt,
-    startedAt: batch.startedAt,
-    completedAt: batch.completedAt,
-    cancelRequested: batch.cancelRequested,
-    totalRuns: batch.runs.length,
-    completedRuns: batch.runs.filter((r) => r.status === "completed").length,
-    failedRuns: batch.runs.filter((r) => r.status === "failed").length,
-    cancelledRuns: batch.runs.filter((r) => r.status === "cancelled").length,
-    runningRuns: batch.runs.filter((r) => r.status === "running").length,
-    queuedRuns: batch.runs.filter((r) => r.status === "queued").length,
-    config: batch.config,
-    generation: batch.generation,
-  });
-}
+  normalizeProjectFilters: () => {
+    const state = get();
+    const options = getProjectFilterOptions(state.batches);
+    const optionValues = new Set(options.map((o) => o.value));
+    const normalized = Array.from(new Set(state.projectFilters)).filter((v) => optionValues.has(v));
+    if (
+      normalized.length !== state.projectFilters.length ||
+      normalized.some((v, i) => v !== state.projectFilters[i])
+    ) {
+      set({ projectFilters: normalized });
+    }
+    return options;
+  },
+
+  syncSelectedBatch: () => {
+    get().normalizeProjectFilters();
+    const state = get();
+    const visible = selectVisibleBatches(state);
+    const isVisible = visible.some((b) => b.id === state.selectedBatchId);
+    if (!isVisible) {
+      set({ selectedBatchId: visible[0]?.id ?? null, selectedRunId: null, activeTab: "overview" });
+    }
+  },
+}));

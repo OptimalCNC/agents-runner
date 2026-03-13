@@ -6,8 +6,8 @@ interface Props {
 
 export function StatusPill({ status }: Props) {
   return (
-    <span class={`pill pill-${status}`}>
-      {status === "running" && <span class="spinner" />}
+    <span className={`pill pill-${status}`}>
+      {status === "running" && <span className="spinner" />}
       {formatStatus(status)}
     </span>
   );

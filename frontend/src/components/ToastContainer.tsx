@@ -1,10 +1,11 @@
-import { toasts } from "../state/store.js";
+import { useAppStore } from "../state/store.js";
 import { Toast } from "./Toast.js";
 
 export function ToastContainer() {
+  const toasts = useAppStore((s) => s.toasts);
   return (
-    <div class="toast-container">
-      {toasts.value.map((t) => (
+    <div className="toast-container">
+      {toasts.map((t) => (
         <Toast key={t.id} toast={t} />
       ))}
     </div>

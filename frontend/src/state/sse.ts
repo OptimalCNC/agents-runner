@@ -1,17 +1,5 @@
-import {
-  batches,
-  batchDetails,
-  connectionStatus,
-  selectedBatchId,
-  sortBatches,
-  upsertBatchSummary,
-  removeBatchFromState,
-  syncSelectedBatch,
-  setBatchDetail,
-  visibleBatches,
-} from "./store.js";
+import { useAppStore, selectVisibleBatches } from "./store.js";
 import type { Batch, BatchSummary } from "../types.js";
-import { normalizeMode } from "../utils/format.js";
 
 let eventSource: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -26,38 +14,44 @@ export function connectEvents() {
     reconnectTimer = null;
   }
 
-  connectionStatus.value = "connecting";
+  useAppStore.setState({ connectionStatus: "connecting" });
   const es = new EventSource("/events");
   eventSource = es;
 
   es.addEventListener("open", () => {
-    connectionStatus.value = "connected";
+    useAppStore.setState({ connectionStatus: "connected" });
   });
 
   es.addEventListener("batches.snapshot", (event: MessageEvent) => {
     const payload = JSON.parse(event.data) as { batches: BatchSummary[] };
-    batches.value = sortBatches(payload.batches);
+    const { sortBatches, syncSelectedBatch } = useAppStore.getState();
+    useAppStore.setState({ batches: sortBatches(payload.batches) });
     syncSelectedBatch();
   });
 
   es.addEventListener("batch.updated", (event: MessageEvent) => {
     const payload = JSON.parse(event.data) as { summary: BatchSummary; batch: Batch };
+    const { upsertBatchSummary, setBatchDetail, syncSelectedBatch } = useAppStore.getState();
     upsertBatchSummary(payload.summary);
     setBatchDetail(payload.batch);
 
-    if (!selectedBatchId.value && visibleBatches.value[0]) {
-      selectedBatchId.value = visibleBatches.value[0].id;
+    const state = useAppStore.getState();
+    if (!state.selectedBatchId) {
+      const visible = selectVisibleBatches(state);
+      if (visible[0]) {
+        useAppStore.setState({ selectedBatchId: visible[0].id });
+      }
     }
     syncSelectedBatch();
   });
 
   es.addEventListener("batch.deleted", (event: MessageEvent) => {
     const payload = JSON.parse(event.data) as { batchId: string };
-    removeBatchFromState(payload.batchId);
+    useAppStore.getState().removeBatchFromState(payload.batchId);
   });
 
   es.addEventListener("error", () => {
-    connectionStatus.value = "disconnected";
+    useAppStore.setState({ connectionStatus: "disconnected" });
     es.close();
     eventSource = null;
     reconnectTimer = setTimeout(() => {

@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef } from "react";
 import { CheckCircleIcon, XCircleIcon, InfoIcon } from "../icons.js";
-import { removeToast } from "../state/store.js";
+import { useAppStore } from "../state/store.js";
 import type { Toast as ToastType } from "../state/store.js";
 
 interface Props {
@@ -14,7 +14,7 @@ export function Toast({ toast }: Props) {
   function dismiss() {
     if (!elRef.current) return;
     elRef.current.classList.add("is-leaving");
-    elRef.current.addEventListener("animationend", () => removeToast(toast.id), { once: true });
+    elRef.current.addEventListener("animationend", () => useAppStore.getState().removeToast(toast.id), { once: true });
   }
 
   useEffect(() => {
@@ -27,13 +27,13 @@ export function Toast({ toast }: Props) {
   const Icon = toast.type === "success" ? CheckCircleIcon : toast.type === "error" ? XCircleIcon : InfoIcon;
 
   return (
-    <div ref={elRef} class={`toast toast-${toast.type}`} onClick={dismiss}>
-      <div class="toast-icon">
+    <div ref={elRef} className={`toast toast-${toast.type}`} onClick={dismiss}>
+      <div className="toast-icon">
         <Icon size={18} />
       </div>
-      <div class="toast-body">
-        <div class="toast-title">{toast.title}</div>
-        {toast.message && <div class="toast-message">{toast.message}</div>}
+      <div className="toast-body">
+        <div className="toast-title">{toast.title}</div>
+        {toast.message && <div className="toast-message">{toast.message}</div>}
       </div>
     </div>
   );

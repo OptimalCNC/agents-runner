@@ -1,19 +1,19 @@
 import type { BatchSummary } from "../types.js";
-import { selectedBatchId, selectedRunId, activeTab, batchDetails } from "../state/store.js";
+import { useAppStore } from "../state/store.js";
 import { apiLoadBatch } from "../state/api.js";
 import { openDeleteBatchDialog } from "../dialogs/DeleteBatchDialog.js";
 import { StatusPill } from "./StatusPill.js";
 import { FolderIcon, XIcon } from "../icons.js";
 import { formatRelative, formatModeLabel } from "../utils/format.js";
 import { getPathLeaf, getProjectPath } from "../utils/paths.js";
-import { setBatchDetail, syncSelectedBatch } from "../state/store.js";
 
 interface Props {
   summary: BatchSummary;
 }
 
 export function BatchCard({ summary }: Props) {
-  const isSelected = summary.id === selectedBatchId.value;
+  const selectedBatchId = useAppStore((s) => s.selectedBatchId);
+  const isSelected = summary.id === selectedBatchId;
   const totalDone = summary.completedRuns + summary.failedRuns + summary.cancelledRuns;
   const progress = summary.totalRuns ? Math.round((totalDone / summary.totalRuns) * 100) : 0;
   const hasFail = summary.failedRuns > 0;
@@ -21,11 +21,10 @@ export function BatchCard({ summary }: Props) {
   const projectFolder = getPathLeaf(projectPath);
 
   async function handleClick() {
-    selectedBatchId.value = summary.id;
-    selectedRunId.value = null;
-    activeTab.value = "overview";
+    useAppStore.setState({ selectedBatchId: summary.id, selectedRunId: null, activeTab: "overview" });
 
-    if (!batchDetails.value.has(summary.id)) {
+    const { batchDetails, setBatchDetail, syncSelectedBatch } = useAppStore.getState();
+    if (!batchDetails.has(summary.id)) {
       try {
         const payload = await apiLoadBatch(summary.id);
         setBatchDetail(payload.batch);
@@ -38,33 +37,33 @@ export function BatchCard({ summary }: Props) {
     }
   }
 
-  function handleDelete(e: MouseEvent) {
+  function handleDelete(e: React.MouseEvent) {
     e.stopPropagation();
-    void openDeleteBatchDialog(summary.id);
+    openDeleteBatchDialog(summary.id);
   }
 
   return (
     <div
-      class={`batch-card${isSelected ? " is-selected" : ""}`}
+      className={`batch-card${isSelected ? " is-selected" : ""}`}
       data-batch-id={summary.id}
       onClick={handleClick}
     >
-      <div class="batch-card-top">
-        <div class="batch-card-info">
-          <div class="batch-card-title">{summary.title}</div>
-          <div class="batch-card-meta">
+      <div className="batch-card-top">
+        <div className="batch-card-info">
+          <div className="batch-card-title">{summary.title}</div>
+          <div className="batch-card-meta">
             {formatModeLabel(summary.mode)} &middot; {formatRelative(summary.createdAt)}
           </div>
           {projectFolder && (
-            <div class="batch-card-project" title={projectPath}>
+            <div className="batch-card-project" title={projectPath}>
               <FolderIcon /><span>{projectFolder}</span>
             </div>
           )}
         </div>
-        <div class="batch-card-actions">
+        <div className="batch-card-actions">
           <StatusPill status={summary.status} />
           <button
-            class="btn-icon batch-card-delete"
+            className="btn-icon batch-card-delete"
             type="button"
             title="Remove batch"
             aria-label="Remove batch"
@@ -74,11 +73,11 @@ export function BatchCard({ summary }: Props) {
           </button>
         </div>
       </div>
-      <div class="batch-card-progress">
-        <div class="progress-bar">
-          <div class={`progress-bar-fill${hasFail ? " has-failures" : ""}`} style={`width:${progress}%`} />
+      <div className="batch-card-progress">
+        <div className="progress-bar">
+          <div className={`progress-bar-fill${hasFail ? " has-failures" : ""}`} style={{ width: `${progress}%` }} />
         </div>
-        <div class="progress-label">
+        <div className="progress-label">
           {totalDone === 0 && summary.runningRuns === 0
             ? "Waiting\u2026"
             : [

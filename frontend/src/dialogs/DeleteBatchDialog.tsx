@@ -1,19 +1,8 @@
-import { useEffect, useRef } from "preact/hooks";
-import {
-  deleteDialog,
-  batches,
-  batchDetails,
-  addToast,
-  removeBatchFromState,
-} from "../state/store.js";
+import { useEffect, useRef } from "react";
+import { useAppStore } from "../state/store.js";
 import { apiDeleteBatch, apiGetDeletePreview } from "../state/api.js";
 import { AlertIcon, FolderIcon } from "../icons.js";
 import type { WorktreeInspection } from "../types.js";
-
-function getBatchById(batchId: string | null) {
-  if (!batchId) return null;
-  return batches.value.find((b) => b.id === batchId) ?? batchDetails.value.get(batchId) ?? null;
-}
 
 function formatWorktreeCount(count: number) {
   return `${count} worktree${count === 1 ? "" : "s"}`;
@@ -28,38 +17,47 @@ function formatChangeCountLabel(entry: WorktreeInspection) {
 }
 
 async function loadDeletePreview() {
-  const state = deleteDialog.value;
+  const state = useAppStore.getState().deleteDialog;
   if (!state.batchId || !state.removeWorktrees) return;
 
   const requestId = state.requestId + 1;
-  deleteDialog.value = { ...state, requestId, loading: true, error: "", preview: null };
+  useAppStore.setState({ deleteDialog: { ...state, requestId, loading: true, error: "", preview: null } });
 
   try {
-    const payload = await apiGetDeletePreview(deleteDialog.value.batchId!);
-    if (deleteDialog.value.requestId !== requestId || deleteDialog.value.batchId !== state.batchId) return;
-    deleteDialog.value = { ...deleteDialog.value, loading: false, preview: payload.preview };
+    const payload = await apiGetDeletePreview(useAppStore.getState().deleteDialog.batchId!);
+    const current = useAppStore.getState().deleteDialog;
+    if (current.requestId !== requestId || current.batchId !== state.batchId) return;
+    useAppStore.setState({ deleteDialog: { ...current, loading: false, preview: payload.preview } });
   } catch (err) {
-    if (deleteDialog.value.requestId !== requestId || deleteDialog.value.batchId !== state.batchId) return;
-    deleteDialog.value = { ...deleteDialog.value, loading: false, error: (err as Error).message };
+    const current = useAppStore.getState().deleteDialog;
+    if (current.requestId !== requestId || current.batchId !== state.batchId) return;
+    useAppStore.setState({ deleteDialog: { ...current, loading: false, error: (err as Error).message } });
   }
 }
 
-export async function openDeleteBatchDialog(batchId: string) {
-  deleteDialog.value = {
-    batchId,
-    removeWorktrees: false,
-    preview: null,
-    loading: false,
-    error: "",
-    submitting: false,
-    requestId: deleteDialog.value.requestId + 1,
-  };
+export function openDeleteBatchDialog(batchId: string) {
+  useAppStore.setState((s) => ({
+    deleteDialog: {
+      batchId,
+      removeWorktrees: false,
+      preview: null,
+      loading: false,
+      error: "",
+      submitting: false,
+      requestId: s.deleteDialog.requestId + 1,
+    },
+  }));
 }
 
 export function DeleteBatchDialog() {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const state = deleteDialog.value;
-  const batch = getBatchById(state.batchId);
+  const state = useAppStore((s) => s.deleteDialog);
+  const batches = useAppStore((s) => s.batches);
+  const batchDetails = useAppStore((s) => s.batchDetails);
+
+  const batch = state.batchId
+    ? (batches.find((b) => b.id === state.batchId) ?? batchDetails.get(state.batchId) ?? null)
+    : null;
   const isOpen = Boolean(state.batchId);
 
   useEffect(() => {
@@ -73,19 +71,21 @@ export function DeleteBatchDialog() {
   }, [isOpen]);
 
   function handleClose() {
-    deleteDialog.value = { ...deleteDialog.value, batchId: null };
+    useAppStore.setState((s) => ({ deleteDialog: { ...s.deleteDialog, batchId: null } }));
   }
 
-  async function handleRemoveWorktreesChange(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    deleteDialog.value = {
-      ...deleteDialog.value,
-      requestId: deleteDialog.value.requestId + 1,
-      removeWorktrees: checked,
-      preview: null,
-      error: "",
-      loading: false,
-    };
+  async function handleRemoveWorktreesChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const checked = e.target.checked;
+    useAppStore.setState((s) => ({
+      deleteDialog: {
+        ...s.deleteDialog,
+        requestId: s.deleteDialog.requestId + 1,
+        removeWorktrees: checked,
+        preview: null,
+        error: "",
+        loading: false,
+      },
+    }));
     if (checked) {
       await loadDeletePreview();
     }
@@ -93,12 +93,12 @@ export function DeleteBatchDialog() {
 
   async function handleConfirm() {
     if (!batch || state.submitting) return;
-    deleteDialog.value = { ...state, submitting: true };
+    useAppStore.setState({ deleteDialog: { ...state, submitting: true } });
 
     try {
       const payload = await apiDeleteBatch(state.batchId!, state.removeWorktrees);
       handleClose();
-      removeBatchFromState(state.batchId!);
+      useAppStore.getState().removeBatchFromState(state.batchId!);
 
       const cleanupMessage = state.removeWorktrees
         ? payload.cleanup?.removedCount != null && payload.cleanup.removedCount > 0
@@ -106,19 +106,21 @@ export function DeleteBatchDialog() {
           : "No associated worktrees to remove."
         : batch.title;
 
-      addToast("success", "Batch removed", cleanupMessage);
+      useAppStore.getState().addToast("success", "Batch removed", cleanupMessage);
     } catch (err) {
       const apiErr = err as { details?: { deletePreview?: unknown }; message: string };
       if (apiErr.details?.deletePreview) {
-        deleteDialog.value = {
-          ...deleteDialog.value,
-          submitting: false,
-          preview: apiErr.details.deletePreview as typeof state.preview,
-        };
+        useAppStore.setState({
+          deleteDialog: {
+            ...state,
+            submitting: false,
+            preview: apiErr.details.deletePreview as typeof state.preview,
+          },
+        });
       } else {
-        deleteDialog.value = { ...deleteDialog.value, submitting: false };
+        useAppStore.setState({ deleteDialog: { ...state, submitting: false } });
       }
-      addToast("error", "Remove failed", apiErr.message);
+      useAppStore.getState().addToast("error", "Remove failed", apiErr.message);
     }
   }
 
@@ -182,26 +184,26 @@ export function DeleteBatchDialog() {
       : "Delete Batch";
 
   return (
-    <dialog ref={dialogRef} class="dialog" onClose={handleClose}>
-      <form method="dialog" class="dialog-shell delete-dialog-shell">
-        <div class="dialog-header">
+    <dialog ref={dialogRef} className="dialog" onClose={handleClose}>
+      <form method="dialog" className="dialog-shell delete-dialog-shell">
+        <div className="dialog-header">
           <h3>{batch ? `Delete ${batch.title}` : "Delete Batch"}</h3>
-          <button class="btn-icon" id="closeDeleteBatchButton" type="button" aria-label="Close" onClick={handleClose}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button className="btn-icon" id="closeDeleteBatchButton" type="button" aria-label="Close" onClick={handleClose}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
         </div>
-        <div class="delete-dialog-body">
-          <p class="delete-dialog-copy">
+        <div className="delete-dialog-body">
+          <p className="delete-dialog-copy">
             {batch
               ? isActive
                 ? `Remove "${batch.title}"? Active runs will be cancelled.`
                 : `Remove "${batch.title}"?`
               : "Remove this batch?"}
           </p>
-          <label class={`delete-dialog-option${submitting ? " is-disabled" : ""}`}>
+          <label className={`delete-dialog-option${submitting ? " is-disabled" : ""}`}>
             <input
               type="checkbox"
               checked={removeWorktrees}
@@ -210,24 +212,24 @@ export function DeleteBatchDialog() {
             />
             <span>Also remove all associated worktrees</span>
           </label>
-          <div class={hintClass}>{hintText}</div>
+          <div className={hintClass}>{hintText}</div>
           {showPreview && previewContent && (
-            <div class={previewClass}>
-              <div class="delete-dialog-preview-title">
+            <div className={previewClass}>
+              <div className="delete-dialog-preview-title">
                 {previewContent.mode === "warning" || previewContent.mode === "error"
                   ? <AlertIcon />
                   : <FolderIcon />}
                 {" "}{previewContent.title}
               </div>
-              <div class="delete-dialog-preview-summary">{previewContent.summary}</div>
-              <div class="delete-dialog-preview-list">
+              <div className="delete-dialog-preview-summary">{previewContent.summary}</div>
+              <div className="delete-dialog-preview-list">
                 {previewContent.entries.map((entry, i) => (
-                  <div key={i} class="delete-dialog-preview-item">
-                    <div class="delete-dialog-preview-item-header">
-                      <div class="delete-dialog-preview-run">
+                  <div key={i} className="delete-dialog-preview-item">
+                    <div className="delete-dialog-preview-item-header">
+                      <div className="delete-dialog-preview-run">
                         {entry.runTitle || `Run ${Number(entry.runIndex ?? 0) + 1}`}
                       </div>
-                      <div class="delete-dialog-preview-meta">
+                      <div className="delete-dialog-preview-meta">
                         {previewContent!.mode === "warning"
                           ? formatChangeCountLabel(entry)
                           : previewContent!.mode === "error"
@@ -235,7 +237,7 @@ export function DeleteBatchDialog() {
                             : (entry.exists ? "Clean" : "Missing")}
                       </div>
                     </div>
-                    <div class="delete-dialog-preview-path">
+                    <div className="delete-dialog-preview-path">
                       {entry.worktreePath || "Worktree path unavailable"}
                     </div>
                   </div>
@@ -244,10 +246,10 @@ export function DeleteBatchDialog() {
             </div>
           )}
         </div>
-        <div class="dialog-footer">
-          <button class="btn btn-ghost" type="button" onClick={handleClose}>Cancel</button>
+        <div className="dialog-footer">
+          <button className="btn btn-ghost" type="button" onClick={handleClose}>Cancel</button>
           <button
-            class="btn btn-danger"
+            className="btn btn-danger"
             type="button"
             disabled={!canConfirm}
             onClick={handleConfirm}

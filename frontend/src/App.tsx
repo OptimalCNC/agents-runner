@@ -9,9 +9,9 @@ export function App() {
   return (
     <>
       <Navbar />
-      <div class="app-layout">
+      <div className="app-layout">
         <Sidebar />
-        <main class="main-content" id="mainContent">
+        <main className="main-content" id="mainContent">
           <BatchDetail />
         </main>
       </div>

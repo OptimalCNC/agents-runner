@@ -1,8 +1,8 @@
-import type { JSX } from "preact";
+import type { ReactNode } from "react";
 
 type IconProps = { size?: number; className?: string };
 
-function Icon({ size = 14, viewBox = "0 0 24 24", children, className }: IconProps & { viewBox?: string; children: JSX.Element | JSX.Element[] }) {
+function Icon({ size = 14, viewBox = "0 0 24 24", children, className }: IconProps & { viewBox?: string; children: ReactNode }) {
   return (
     <svg
       width={size}
@@ -10,10 +10,10 @@ function Icon({ size = 14, viewBox = "0 0 24 24", children, className }: IconPro
       viewBox={viewBox}
       fill="none"
       stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      class={className}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
     >
       {children}
     </svg>

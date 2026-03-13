@@ -1,8 +1,8 @@
-import { signal } from "@preact/signals";
+import { create } from "zustand";
 
 import { apiValidateCodexAuth } from "./api.js";
 import { ensureModelCatalogLoaded } from "./modelCatalog.js";
-import { config } from "./store.js";
+import { useAppStore } from "./store.js";
 
 import type { CodexAuthValidationResponse, CodexAuthValidationStatus, CodexCredentialSource } from "../types.js";
 
@@ -15,24 +15,24 @@ export interface CodexAuthState {
   message: string;
 }
 
-export const codexAuth = signal<CodexAuthState>({
+export const useCodexAuthStore = create<CodexAuthState>(() => ({
   status: "checking",
   checkedAt: null,
   source: "none",
   message: CHECKING_MESSAGE,
-});
+}));
 
 let inFlight: Promise<void> | null = null;
 
 function inferCredentialSource(): CodexCredentialSource {
-  const env = config.value?.codexEnvironment;
+  const env = useAppStore.getState().config?.codexEnvironment;
   if (env?.hasOpenAIApiKey) return "apiKey";
   if (env?.hasCodexProfile) return "profile";
   return "none";
 }
 
 function applyValidation(payload: CodexAuthValidationResponse): void {
-  codexAuth.value = payload;
+  useCodexAuthStore.setState(payload);
   if (payload.status === "valid") {
     void ensureModelCatalogLoaded();
   }
@@ -41,23 +41,23 @@ function applyValidation(payload: CodexAuthValidationResponse): void {
 export async function refreshCodexAuthValidation(): Promise<void> {
   const source = inferCredentialSource();
   if (!inFlight) {
-    codexAuth.value = {
+    useCodexAuthStore.setState({
       status: "checking",
       checkedAt: null,
       source,
       message: CHECKING_MESSAGE,
-    };
+    });
 
     inFlight = (async () => {
       try {
         applyValidation(await apiValidateCodexAuth());
       } catch (error) {
-        codexAuth.value = {
+        useCodexAuthStore.setState({
           status: "invalid",
           checkedAt: new Date().toISOString(),
           source,
           message: (error as Error).message || "Codex authentication validation failed.",
-        };
+        });
       } finally {
         inFlight = null;
       }

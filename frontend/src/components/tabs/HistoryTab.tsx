@@ -8,15 +8,15 @@ interface Props {
 export function HistoryTab({ run }: Props) {
   if (!run.items.length) {
     return (
-      <div class="tab-panel is-active" data-tab="history">
-        <div class="text-muted text-sm">No streamed history recorded yet.</div>
+      <div className="tab-panel is-active" data-tab="history">
+        <div className="text-muted text-sm">No streamed history recorded yet.</div>
       </div>
     );
   }
 
   return (
-    <div class="tab-panel is-active" data-tab="history">
-      <div class="timeline">
+    <div className="tab-panel is-active" data-tab="history">
+      <div className="timeline">
         {run.items.map((item, i) => (
           <StreamItemView key={item.id ?? i} item={item} />
         ))}

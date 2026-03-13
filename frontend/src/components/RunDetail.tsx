@@ -1,5 +1,5 @@
 import type { Run } from "../types.js";
-import { activeTab } from "../state/store.js";
+import { useAppStore } from "../state/store.js";
 import { StatusPill } from "./StatusPill.js";
 import { OverviewTab } from "./tabs/OverviewTab.js";
 import { ResponseTab } from "./tabs/ResponseTab.js";
@@ -12,26 +12,28 @@ interface Props {
 }
 
 export function RunDetail({ run }: Props) {
+  const activeTabRaw = useAppStore((s) => s.activeTab);
+
   if (!run) {
     return (
-      <div class="run-detail">
-        <div class="empty-state">
-          <div class="empty-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <div className="run-detail">
+        <div className="empty-state">
+          <div className="empty-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
               <circle cx="9" cy="7" r="4" />
               <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
               <path d="M16 3.13a4 4 0 0 1 0 7.75" />
             </svg>
           </div>
-          <p class="empty-title">No run selected</p>
-          <p class="empty-desc">Select a run card above to inspect details.</p>
+          <p className="empty-title">No run selected</p>
+          <p className="empty-desc">Select a run card above to inspect details.</p>
         </div>
       </div>
     );
   }
 
-  const tab = activeTab.value === "items" ? "history" : (activeTab.value || "overview");
+  const tab = activeTabRaw === "items" ? "history" : (activeTabRaw || "overview");
 
   const tabs = [
     { key: "overview", label: "Overview" },
@@ -42,21 +44,21 @@ export function RunDetail({ run }: Props) {
   ];
 
   return (
-    <div class="run-detail">
-      <div class="run-detail-header">
-        <div class="run-detail-title">{run.title}</div>
-        <div class="run-detail-header-actions">
+    <div className="run-detail">
+      <div className="run-detail-header">
+        <div className="run-detail-title">{run.title}</div>
+        <div className="run-detail-header-actions">
           <StatusPill status={run.status} />
         </div>
       </div>
-      <div class="tab-bar">
+      <div className="tab-bar">
         {tabs.map((t) => (
           <button
             key={t.key}
-            class={`tab-btn${tab === t.key ? " is-active" : ""}`}
+            className={`tab-btn${tab === t.key ? " is-active" : ""}`}
             data-tab-key={t.key}
             type="button"
-            onClick={() => { activeTab.value = t.key; }}
+            onClick={() => { useAppStore.setState({ activeTab: t.key }); }}
           >
             {t.label}
           </button>

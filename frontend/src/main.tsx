@@ -1,17 +1,8 @@
-import { render } from "preact";
+import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
 import { connectEvents } from "./state/sse.js";
 import { apiLoadConfig, apiLoadBatches } from "./state/api.js";
-import {
-  config,
-  batches,
-  sortBatches,
-  syncSelectedBatch,
-  addToast,
-  setBatchDetail,
-  selectedBatchId,
-  batchDetails,
-} from "./state/store.js";
+import { useAppStore } from "./state/store.js";
 import { refreshCodexAuthValidation } from "./state/codexAuth.js";
 import { apiLoadBatch } from "./state/api.js";
 import "./styles/index.css";
@@ -19,20 +10,22 @@ import "./styles/index.css";
 async function init() {
   // Load config
   const cfgData = await apiLoadConfig();
-  config.value = cfgData;
+  useAppStore.setState({ config: cfgData });
   void refreshCodexAuthValidation();
 
   // Load batches list
   const batchData = await apiLoadBatches();
-  batches.value = sortBatches(batchData.batches);
+  const { sortBatches, syncSelectedBatch } = useAppStore.getState();
+  useAppStore.setState({ batches: sortBatches(batchData.batches) });
   syncSelectedBatch();
 
   // Load detail for selected batch
-  if (selectedBatchId.value && !batchDetails.value.has(selectedBatchId.value)) {
+  const { selectedBatchId, batchDetails, setBatchDetail } = useAppStore.getState();
+  if (selectedBatchId && !batchDetails.has(selectedBatchId)) {
     try {
-      const detail = await apiLoadBatch(selectedBatchId.value);
+      const detail = await apiLoadBatch(selectedBatchId);
       setBatchDetail(detail.batch);
-      syncSelectedBatch();
+      useAppStore.getState().syncSelectedBatch();
     } catch {
       // ignore
     }
@@ -42,9 +35,9 @@ async function init() {
   connectEvents();
 }
 
-render(<App />, document.getElementById("app")!);
+createRoot(document.getElementById("app")!).render(<App />);
 
 init().catch((err: unknown) => {
   console.error(err);
-  addToast("error", "Initialization failed", (err as Error).message);
+  useAppStore.getState().addToast("error", "Initialization failed", (err as Error).message);
 });

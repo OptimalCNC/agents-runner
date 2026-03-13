@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "preact/hooks";
-import { browserState, browserDialogOpen, config } from "../state/store.js";
+import { useEffect, useRef } from "react";
+import { useAppStore } from "../state/store.js";
 import { apiBrowseFs } from "../state/api.js";
 import { ChevronLeftIcon } from "../icons.js";
 
@@ -10,29 +10,33 @@ interface Props {
 
 async function browsePath(path: string) {
   const payload = await apiBrowseFs(path);
-  browserState.value = {
-    ...browserState.value,
-    currentPath: payload.path,
-    parentPath: payload.parentPath,
-    directories: payload.directories,
-  };
+  useAppStore.setState((s) => ({
+    browserState: {
+      ...s.browserState,
+      currentPath: payload.path,
+      parentPath: payload.parentPath,
+      directories: payload.directories,
+    },
+  }));
 }
 
 export async function openBrowser(target: "project" | "worktree", initialPath: string) {
-  browserState.value = {
-    target,
-    currentPath: "",
-    parentPath: null,
-    directories: [],
-  };
-  browserDialogOpen.value = true;
-  await browsePath(initialPath || config.value?.homeDirectory || "");
+  useAppStore.setState({
+    browserState: {
+      target,
+      currentPath: "",
+      parentPath: null,
+      directories: [],
+    },
+    browserDialogOpen: true,
+  });
+  await browsePath(initialPath || useAppStore.getState().config?.homeDirectory || "");
 }
 
 export function FolderBrowser({ title, onSelect }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const state = browserState.value;
-  const isOpen = browserDialogOpen.value;
+  const state = useAppStore((s) => s.browserState);
+  const isOpen = useAppStore((s) => s.browserDialogOpen);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -45,31 +49,31 @@ export function FolderBrowser({ title, onSelect }: Props) {
   }, [isOpen]);
 
   function handleClose() {
-    browserDialogOpen.value = false;
+    useAppStore.setState({ browserDialogOpen: false });
   }
 
   function handleSelect() {
     if (state.currentPath) {
       onSelect(state.currentPath);
     }
-    browserDialogOpen.value = false;
+    useAppStore.setState({ browserDialogOpen: false });
   }
 
   return (
-    <dialog ref={dialogRef} class="dialog" onClose={handleClose}>
-      <form method="dialog" class="dialog-shell">
-        <div class="dialog-header">
+    <dialog ref={dialogRef} className="dialog" onClose={handleClose}>
+      <form method="dialog" className="dialog-shell">
+        <div className="dialog-header">
           <h3>{title}</h3>
-          <button class="btn-icon" type="submit" aria-label="Close">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button className="btn-icon" type="submit" aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
           </button>
         </div>
-        <div class="dialog-toolbar">
+        <div className="dialog-toolbar">
           <button
-            class="btn btn-ghost btn-sm"
+            className="btn btn-ghost btn-sm"
             type="button"
             disabled={!state.parentPath}
             onClick={() => state.parentPath && browsePath(state.parentPath)}
@@ -77,19 +81,19 @@ export function FolderBrowser({ title, onSelect }: Props) {
             <ChevronLeftIcon />
             Up
           </button>
-          <code class="browser-path">{state.currentPath}</code>
-          <button class="btn btn-primary btn-sm" type="button" onClick={handleSelect}>
+          <code className="browser-path">{state.currentPath}</code>
+          <button className="btn btn-primary btn-sm" type="button" onClick={handleSelect}>
             Select
           </button>
         </div>
-        <div class="browser-list">
+        <div className="browser-list">
           {state.directories.length === 0 ? (
-            <div class="empty-state"><p class="empty-title">No child folders</p></div>
+            <div className="empty-state"><p className="empty-title">No child folders</p></div>
           ) : (
             state.directories.map((entry) => (
               <button
                 key={entry.path}
-                class="browser-entry"
+                className="browser-entry"
                 type="button"
                 onClick={() => browsePath(entry.path)}
               >

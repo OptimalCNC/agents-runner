@@ -1,8 +1,9 @@
-import { useRef, useEffect } from "preact/hooks";
-import { modelCatalog, modelMenuOpen } from "../state/store.js";
+import { useRef, useEffect } from "react";
+import { useAppStore } from "../state/store.js";
 import { ensureModelCatalogLoaded, hasCodexModelAccess } from "../state/modelCatalog.js";
 import { RefreshIcon, ChevronDownIcon } from "../icons.js";
 import { formatRelative, formatDate, formatReasoningEffortLabel } from "../utils/format.js";
+import type { CodexModel } from "../types.js";
 
 interface Props {
   value: string;
@@ -10,29 +11,29 @@ interface Props {
   onReasoningEffortChange?: (model: string | null) => void;
 }
 
-function getDefaultCatalogModel() {
-  return modelCatalog.value.models.find((m) => m.isDefault) ?? null;
+function getDefaultCatalogModel(models: CodexModel[]) {
+  return models.find((m) => m.isDefault) ?? null;
 }
 
-function findCatalogModelByValue(value: string) {
+function findCatalogModelByValue(value: string, models: CodexModel[]) {
   const target = String(value ?? "").trim();
   if (!target) return null;
-  return modelCatalog.value.models.find((m) => m.model === target) ?? null;
+  return models.find((m) => m.model === target) ?? null;
 }
 
 export function ModelPicker({ value, onChange, onReasoningEffortChange }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const comboboxRef = useRef<HTMLDivElement>(null);
 
-  const catalog = modelCatalog.value;
-  const isOpen = modelMenuOpen.value;
+  const catalog = useAppStore((s) => s.modelCatalog);
+  const isOpen = useAppStore((s) => s.modelMenuOpen);
   const hasAccess = hasCodexModelAccess();
-  const defaultModel = getDefaultCatalogModel();
+  const defaultModel = getDefaultCatalogModel(catalog.models);
 
   // Get visible models for the menu
   const query = (() => {
     const v = value.trim();
-    if (!v || findCatalogModelByValue(v)) return "";
+    if (!v || findCatalogModelByValue(v, catalog.models)) return "";
     return v.toLowerCase();
   })();
 
@@ -45,7 +46,7 @@ export function ModelPicker({ value, onChange, onReasoningEffortChange }: Props)
   // Notify parent of model change for reasoning effort sync
   useEffect(() => {
     if (onReasoningEffortChange) {
-      const selected = findCatalogModelByValue(value);
+      const selected = findCatalogModelByValue(value, catalog.models);
       onReasoningEffortChange(selected?.model ?? null);
     }
   }, [value, catalog.models.length]);
@@ -55,7 +56,7 @@ export function ModelPicker({ value, onChange, onReasoningEffortChange }: Props)
     function handleClick(e: MouseEvent) {
       if (!isOpen) return;
       if (comboboxRef.current?.contains(e.target as Node)) return;
-      modelMenuOpen.value = false;
+      useAppStore.setState({ modelMenuOpen: false });
     }
     document.addEventListener("click", handleClick);
     return () => document.removeEventListener("click", handleClick);
@@ -94,59 +95,60 @@ export function ModelPicker({ value, onChange, onReasoningEffortChange }: Props)
 
   function handleMenuSelect(modelValue: string) {
     onChange(modelValue);
-    modelMenuOpen.value = false;
+    useAppStore.setState({ modelMenuOpen: false });
     inputRef.current?.focus();
   }
 
   function handleToggle() {
-    modelMenuOpen.value = !modelMenuOpen.value;
-    if (modelMenuOpen.value && hasAccess && !catalog.loaded && !catalog.loading) {
+    const next = !isOpen;
+    useAppStore.setState({ modelMenuOpen: next });
+    if (next && hasAccess && !catalog.loaded && !catalog.loading) {
       void ensureModelCatalogLoaded();
     }
   }
 
   function handleInputFocus() {
     if (!catalog.loaded && !catalog.loading) return;
-    modelMenuOpen.value = true;
+    useAppStore.setState({ modelMenuOpen: true });
   }
 
-  function handleInputChange(e: Event) {
-    const v = (e.target as HTMLInputElement).value;
+  function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const v = e.target.value;
     onChange(v);
     if (hasAccess || catalog.loaded || catalog.loading) {
-      modelMenuOpen.value = true;
+      useAppStore.setState({ modelMenuOpen: true });
     }
   }
 
   return (
-    <div class="model-combobox" ref={comboboxRef}>
-      <div class="model-combobox-row">
+    <div className="model-combobox" ref={comboboxRef}>
+      <div className="model-combobox-row">
         <input
           ref={inputRef}
           id="model"
           name="model"
           value={value}
           placeholder={placeholder}
-          autocomplete="off"
-          spellcheck={false}
+          autoComplete="off"
+          spellCheck={false}
           onFocus={handleInputFocus}
-          onInput={handleInputChange}
+          onChange={handleInputChange}
         />
         <button
-          class="btn-icon model-combobox-action"
+          className="btn-icon model-combobox-action"
           type="button"
           aria-label="Refresh models"
           title={!hasAccess ? "Live model discovery needs Codex auth" : catalog.loading ? "Loading models from Codex" : "Refresh models"}
           disabled={!hasAccess || catalog.loading}
           onClick={async () => {
-            modelMenuOpen.value = true;
+            useAppStore.setState({ modelMenuOpen: true });
             try { await ensureModelCatalogLoaded(true); } catch {}
           }}
         >
           <RefreshIcon />
         </button>
         <button
-          class={`btn-icon model-combobox-action model-combobox-toggle${isOpen ? " is-open" : ""}`}
+          className={`btn-icon model-combobox-action model-combobox-toggle${isOpen ? " is-open" : ""}`}
           type="button"
           aria-label="Show models"
           aria-expanded={isOpen ? "true" : "false"}
@@ -157,36 +159,36 @@ export function ModelPicker({ value, onChange, onReasoningEffortChange }: Props)
         </button>
       </div>
       <div
-        class={`form-hint model-combobox-status${statusTone ? ` ${statusTone}` : ""}`}
+        className={`form-hint model-combobox-status${statusTone ? ` ${statusTone}` : ""}`}
         title={catalog.fetchedAt ? formatDate(catalog.fetchedAt) : ""}
       >
         {statusText}
       </div>
       {isOpen && (
-        <div class="model-combobox-menu">
+        <div className="model-combobox-menu">
           {catalog.loading && catalog.models.length === 0 ? (
-            <div class="model-combobox-empty">Loading models from Codex\u2026</div>
+            <div className="model-combobox-empty">Loading models from Codex\u2026</div>
           ) : !hasAccess && catalog.models.length === 0 ? (
-            <div class="model-combobox-empty">
+            <div className="model-combobox-empty">
               No Codex credentials detected for live model discovery. You can still type any model id manually.
             </div>
           ) : catalog.error && catalog.models.length === 0 ? (
-            <div class="model-combobox-empty">{catalog.error}</div>
+            <div className="model-combobox-empty">{catalog.error}</div>
           ) : (
             <>
               <button
-                class={`model-option${value ? "" : " is-selected"}`}
+                className={`model-option${value ? "" : " is-selected"}`}
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => handleMenuSelect("")}
               >
-                <span class="model-option-title-row">
-                  <span class="model-option-title">
+                <span className="model-option-title-row">
+                  <span className="model-option-title">
                     {defaultModel ? `Codex default (${defaultModel.model})` : "Codex default"}
                   </span>
-                  <span class="model-option-badge">Auto</span>
+                  <span className="model-option-badge">Auto</span>
                 </span>
-                <span class="model-option-desc">
+                <span className="model-option-desc">
                   {defaultModel
                     ? defaultModel.defaultReasoningEffort && defaultModel.defaultReasoningEffort !== "none"
                       ? `Use Codex's current default model. Default reasoning is ${formatReasoningEffortLabel(defaultModel.defaultReasoningEffort)}.`
@@ -195,25 +197,25 @@ export function ModelPicker({ value, onChange, onReasoningEffortChange }: Props)
                 </span>
               </button>
               {visibleModels.length === 0 ? (
-                <div class="model-combobox-empty">
+                <div className="model-combobox-empty">
                   No matching live models. You can still type any model id manually.
                 </div>
               ) : (
-                visibleModels.map((model) => (
+                visibleModels.map((m) => (
                   <button
-                    key={model.model}
-                    class={`model-option${model.model === value ? " is-selected" : ""}`}
+                    key={m.model}
+                    className={`model-option${m.model === value ? " is-selected" : ""}`}
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => handleMenuSelect(model.model)}
+                    onClick={() => handleMenuSelect(m.model)}
                   >
-                    <span class="model-option-title-row">
-                      <span class="model-option-title">{model.displayName || model.model}</span>
-                      {model.isDefault && <span class="model-option-badge">Default</span>}
+                    <span className="model-option-title-row">
+                      <span className="model-option-title">{m.displayName || m.model}</span>
+                      {m.isDefault && <span className="model-option-badge">Default</span>}
                     </span>
-                    <span class="model-option-model">{model.model}</span>
-                    {model.description && (
-                      <span class="model-option-desc">{model.description}</span>
+                    <span className="model-option-model">{m.model}</span>
+                    {m.description && (
+                      <span className="model-option-desc">{m.description}</span>
                     )}
                   </button>
                 ))

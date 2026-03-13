@@ -1,20 +1,20 @@
-import { projectFilters, getProjectFilterOptions, syncSelectedBatch } from "../state/store.js";
+import { useAppStore, getProjectFilterOptions } from "../state/store.js";
 
 export function ProjectFilter() {
-  const filters = projectFilters.value;
-  const options = getProjectFilterOptions();
+  const filters = useAppStore((s) => s.projectFilters);
+  const batches = useAppStore((s) => s.batches);
+  const options = getProjectFilterOptions(batches);
 
   if (options.length === 0) {
-    return <div class="filter-chip-empty">No projects yet.</div>;
+    return <div className="filter-chip-empty">No projects yet.</div>;
   }
 
   function toggleFilter(value: string) {
-    if (filters.includes(value)) {
-      projectFilters.value = filters.filter((v) => v !== value);
-    } else {
-      projectFilters.value = [...filters, value];
-    }
-    syncSelectedBatch();
+    const next = filters.includes(value)
+      ? filters.filter((v) => v !== value)
+      : [...filters, value];
+    useAppStore.setState({ projectFilters: next });
+    useAppStore.getState().syncSelectedBatch();
   }
 
   return (
@@ -24,13 +24,13 @@ export function ProjectFilter() {
         return (
           <button
             key={option.value}
-            class={`filter-chip${isActive ? " is-active" : ""}`}
+            className={`filter-chip${isActive ? " is-active" : ""}`}
             type="button"
             title={option.value}
             aria-pressed={isActive ? "true" : "false"}
             onClick={() => toggleFilter(option.value)}
           >
-            <span class="filter-chip-label">{option.label}</span>
+            <span className="filter-chip-label">{option.label}</span>
           </button>
         );
       })}
