@@ -1697,6 +1697,7 @@ select {
 .dialog {
   width: min(640px, calc(100vw - 40px));
   max-height: 80vh;
+  margin: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
