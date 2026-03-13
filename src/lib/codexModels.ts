@@ -1,7 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+
+import type { CodexAppServerClient, CodexModel, ModelCatalog, ModelCatalogResponse } from "../types";
 
 const APP_SERVER_ARGS = ["app-server", "--listen", "stdio://"];
 const APP_SERVER_REQUEST_TIMEOUT_MS = 30_000;
@@ -10,7 +12,7 @@ const CACHE_TTL_MS = 5 * 60_000;
 const INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 const APP_SERVER_ORIGINATOR = "agents_runner";
 
-const PLATFORM_PACKAGE_BY_TARGET = {
+const PLATFORM_PACKAGE_BY_TARGET: Record<string, string> = {
   "x86_64-unknown-linux-musl": "@openai/codex-linux-x64",
   "aarch64-unknown-linux-musl": "@openai/codex-linux-arm64",
   "x86_64-apple-darwin": "@openai/codex-darwin-x64",
@@ -21,13 +23,37 @@ const PLATFORM_PACKAGE_BY_TARGET = {
 
 const moduleRequire = createRequire(import.meta.url);
 
+interface CacheEntry {
+  models: CodexModel[];
+  fetchedAtMs: number;
+  fetchedAt: string;
+}
+
+interface PendingRequest {
+  method: string;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface ResolvedBinary {
+  binaryPath: string;
+  pathEntries: string[];
+}
+
+export interface ModelCatalogOptions {
+  fetcher?: () => Promise<CodexModel[]>;
+  now?: () => number;
+  ttlMs?: number;
+}
+
 export function createCodexModelCatalog({
   fetcher = fetchCodexModels,
   now = () => Date.now(),
   ttlMs = CACHE_TTL_MS,
-} = {}) {
-  let cache = null;
-  let inFlight = null;
+}: ModelCatalogOptions = {}): ModelCatalog {
+  let cache: CacheEntry | null = null;
+  let inFlight: Promise<ModelCatalogResponse> | null = null;
 
   return {
     async getModels({ refresh = false } = {}) {
@@ -35,7 +61,7 @@ export function createCodexModelCatalog({
       const hasFreshCache = cache && (nowMs - cache.fetchedAtMs) < ttlMs;
 
       if (!refresh && hasFreshCache) {
-        return buildCatalogResponse(cache, false);
+        return buildCatalogResponse(cache!, false);
       }
 
       if (!inFlight) {
@@ -66,9 +92,13 @@ export function createCodexModelCatalog({
   };
 }
 
+export interface FetchCodexModelsOptions {
+  clientFactory?: () => Promise<CodexAppServerClient>;
+}
+
 export async function fetchCodexModels({
-  clientFactory = () => createCodexAppServerClient(),
-} = {}) {
+  clientFactory = () => Promise.resolve(createCodexAppServerClient()),
+}: FetchCodexModelsOptions = {}): Promise<CodexModel[]> {
   const client = await clientFactory();
 
   try {
@@ -79,11 +109,11 @@ export async function fetchCodexModels({
       },
     });
 
-    const models = [];
-    let cursor = null;
+    const models: CodexModel[] = [];
+    let cursor: string | null = null;
 
     do {
-      const response = await client.request("model/list", cursor ? { cursor } : {});
+      const response = await client.request("model/list", cursor ? { cursor } : {}) as Record<string, unknown>;
       const page = Array.isArray(response?.data) ? response.data : [];
 
       for (const model of page) {
@@ -94,7 +124,7 @@ export async function fetchCodexModels({
       }
 
       cursor = typeof response?.nextCursor === "string" && response.nextCursor
-        ? response.nextCursor
+        ? response.nextCursor as string
         : null;
     } while (cursor);
 
@@ -106,7 +136,10 @@ export async function fetchCodexModels({
   }
 }
 
-export function createCodexAppServerClient(options = {}) {
+export function createCodexAppServerClient(options: {
+  env?: NodeJS.ProcessEnv;
+  requestTimeoutMs?: number;
+} = {}): CodexAppServerClient {
   if (typeof Bun !== "undefined" && typeof Bun.spawn === "function") {
     return createBunCodexAppServerClient(options);
   }
@@ -117,7 +150,10 @@ export function createCodexAppServerClient(options = {}) {
 function createBunCodexAppServerClient({
   env = process.env,
   requestTimeoutMs = APP_SERVER_REQUEST_TIMEOUT_MS,
-} = {}) {
+}: {
+  env?: NodeJS.ProcessEnv;
+  requestTimeoutMs?: number;
+} = {}): CodexAppServerClient {
   const { binaryPath, pathEntries } = resolveCodexBinary();
   const child = Bun.spawn([binaryPath, ...APP_SERVER_ARGS], {
     env: buildCodexEnvironment(env, pathEntries),
@@ -126,14 +162,14 @@ function createBunCodexAppServerClient({
     stderr: "pipe",
   });
 
-  const pendingRequests = new Map();
+  const pendingRequests = new Map<string, PendingRequest>();
   let stdoutBuffer = "";
   let stderrBuffer = "";
   let nextRequestId = 0;
   let closed = false;
-  let fatalError = null;
+  let fatalError: Error | null = null;
 
-  function rejectPendingRequests(error) {
+  function rejectPendingRequests(error: unknown): void {
     const normalizedError = normalizeError(error);
     fatalError = fatalError || normalizedError;
 
@@ -145,13 +181,13 @@ function createBunCodexAppServerClient({
     pendingRequests.clear();
   }
 
-  function handleStdoutLine(line) {
+  function handleStdoutLine(line: string): void {
     const trimmed = line.trim();
     if (!trimmed) {
       return;
     }
 
-    let message;
+    let message: Record<string, unknown>;
     try {
       message = JSON.parse(trimmed);
     } catch (error) {
@@ -173,14 +209,15 @@ function createBunCodexAppServerClient({
     clearTimeout(pending.timer);
 
     if (message.error) {
-      pending.reject(new Error(message.error.message || `Codex app-server request failed: ${pending.method}`));
+      const errObj = message.error as Record<string, unknown>;
+      pending.reject(new Error((errObj.message as string) || `Codex app-server request failed: ${pending.method}`));
       return;
     }
 
     pending.resolve(message.result);
   }
 
-  function handleStdoutChunk(text) {
+  function handleStdoutChunk(text: string): void {
     stdoutBuffer += text;
 
     while (true) {
@@ -197,10 +234,10 @@ function createBunCodexAppServerClient({
 
   const stdoutPump = pumpReadableStream(
     child.stdout.getReader(),
-    (text) => {
+    (text: string) => {
       handleStdoutChunk(text);
     },
-    (error) => {
+    (error: unknown) => {
       if (!closed) {
         rejectPendingRequests(new Error(`Codex app-server stream failed: ${normalizeError(error).message}`));
       }
@@ -209,13 +246,13 @@ function createBunCodexAppServerClient({
 
   const stderrPump = pumpReadableStream(
     child.stderr.getReader(),
-    (text) => {
+    (text: string) => {
       stderrBuffer += text;
     },
     () => {},
   );
 
-  const exitPromise = child.exited.then((code) => {
+  const exitPromise = child.exited.then((code: number) => {
     if (!closed && (code !== 0 || pendingRequests.size > 0)) {
       const stderrText = stderrBuffer.trim();
       rejectPendingRequests(
@@ -229,7 +266,7 @@ function createBunCodexAppServerClient({
     return code;
   });
 
-  function request(method, params = {}) {
+  function request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     if (fatalError) {
       return Promise.reject(fatalError);
     }
@@ -261,7 +298,7 @@ function createBunCodexAppServerClient({
     });
   }
 
-  async function close() {
+  async function close(): Promise<void> {
     if (closed) {
       await exitPromise;
       return;
@@ -289,7 +326,7 @@ function createBunCodexAppServerClient({
 
     const exited = await Promise.race([
       exitPromise.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), APP_SERVER_SHUTDOWN_TIMEOUT_MS)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), APP_SERVER_SHUTDOWN_TIMEOUT_MS)),
     ]);
 
     if (!exited) {
@@ -311,7 +348,11 @@ function createNodeCodexAppServerClient({
   spawnImpl = spawn,
   env = process.env,
   requestTimeoutMs = APP_SERVER_REQUEST_TIMEOUT_MS,
-} = {}) {
+}: {
+  spawnImpl?: typeof spawn;
+  env?: NodeJS.ProcessEnv;
+  requestTimeoutMs?: number;
+} = {}): CodexAppServerClient {
   const { binaryPath, pathEntries } = resolveCodexBinary();
   const child = spawnImpl(binaryPath, APP_SERVER_ARGS, {
     env: buildCodexEnvironment(env, pathEntries),
@@ -327,19 +368,19 @@ function createNodeCodexAppServerClient({
     throw new Error("Codex app-server pipes are unavailable.");
   }
 
-  const pendingRequests = new Map();
-  const stderrChunks = [];
+  const pendingRequests = new Map<string, PendingRequest>();
+  const stderrChunks: Buffer[] = [];
   let stdoutBuffer = "";
 
   let nextRequestId = 0;
   let closed = false;
-  let fatalError = null;
-  let resolveExit;
-  const exitPromise = new Promise((resolve) => {
+  let fatalError: Error | null = null;
+  let resolveExit: () => void;
+  const exitPromise = new Promise<void>((resolve) => {
     resolveExit = resolve;
   });
 
-  function rejectPendingRequests(error) {
+  function rejectPendingRequests(error: unknown): void {
     const normalizedError = normalizeError(error);
     fatalError = fatalError || normalizedError;
 
@@ -351,7 +392,7 @@ function createNodeCodexAppServerClient({
     pendingRequests.clear();
   }
 
-  function formatFailure(code, signal) {
+  function formatFailure(code: number | null, signal: string | null): string {
     const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
     const stderrText = getProcessStderr(stderrChunks);
     return stderrText
@@ -359,30 +400,30 @@ function createNodeCodexAppServerClient({
       : `Codex app-server exited with ${detail}.`;
   }
 
-  child.stderr?.on("data", (chunk) => {
+  child.stderr?.on("data", (chunk: Buffer) => {
     stderrChunks.push(Buffer.from(chunk));
   });
 
-  child.once("error", (error) => {
+  child.once("error", (error: Error) => {
     if (!closed) {
       rejectPendingRequests(error);
     }
   });
 
-  child.once("exit", (code, signal) => {
+  child.once("exit", (code: number | null, signal: string | null) => {
     if (!closed && (code !== 0 || signal || pendingRequests.size > 0)) {
       rejectPendingRequests(new Error(formatFailure(code, signal)));
     }
     resolveExit();
   });
 
-  function handleStdoutLine(line) {
+  function handleStdoutLine(line: string): void {
     const trimmed = line.trim();
     if (!trimmed) {
       return;
     }
 
-    let message;
+    let message: Record<string, unknown>;
     try {
       message = JSON.parse(trimmed);
     } catch (error) {
@@ -404,14 +445,15 @@ function createNodeCodexAppServerClient({
     clearTimeout(pending.timer);
 
     if (message.error) {
-      pending.reject(new Error(message.error.message || `Codex app-server request failed: ${pending.method}`));
+      const errObj = message.error as Record<string, unknown>;
+      pending.reject(new Error((errObj.message as string) || `Codex app-server request failed: ${pending.method}`));
       return;
     }
 
     pending.resolve(message.result);
   }
 
-  child.stdout.on("data", (chunk) => {
+  child.stdout.on("data", (chunk: Buffer) => {
     stdoutBuffer += chunk.toString();
 
     while (true) {
@@ -426,7 +468,7 @@ function createNodeCodexAppServerClient({
     }
   });
 
-  child.stdout.on("error", (error) => {
+  child.stdout.on("error", (error: Error) => {
     if (!closed) {
       rejectPendingRequests(new Error(`Codex app-server stream failed: ${normalizeError(error).message}`));
     }
@@ -439,7 +481,7 @@ function createNodeCodexAppServerClient({
     }
   });
 
-  function request(method, params = {}) {
+  function request(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     if (fatalError) {
       return Promise.reject(fatalError);
     }
@@ -461,7 +503,7 @@ function createNodeCodexAppServerClient({
 
       pendingRequests.set(requestId, { method, resolve, reject, timer });
 
-      child.stdin.write(`${payload}\n`, (error) => {
+      child.stdin!.write(`${payload}\n`, (error?: Error | null) => {
         if (!error) {
           return;
         }
@@ -478,7 +520,7 @@ function createNodeCodexAppServerClient({
     });
   }
 
-  async function close() {
+  async function close(): Promise<void> {
     if (closed) {
       await exitPromise;
       return;
@@ -493,7 +535,7 @@ function createNodeCodexAppServerClient({
     pendingRequests.clear();
 
     try {
-      child.stdin.end();
+      child.stdin!.end();
     } catch {
       // ignore
     }
@@ -508,7 +550,7 @@ function createNodeCodexAppServerClient({
 
     const exited = await Promise.race([
       exitPromise.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), APP_SERVER_SHUTDOWN_TIMEOUT_MS)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), APP_SERVER_SHUTDOWN_TIMEOUT_MS)),
     ]);
 
     if (!exited) {
@@ -527,7 +569,7 @@ function createNodeCodexAppServerClient({
   return { request, close };
 }
 
-function buildCatalogResponse(cacheEntry, stale) {
+function buildCatalogResponse(cacheEntry: CacheEntry, stale: boolean): ModelCatalogResponse {
   return {
     models: cacheEntry.models,
     fetchedAt: cacheEntry.fetchedAt,
@@ -535,9 +577,9 @@ function buildCatalogResponse(cacheEntry, stale) {
   };
 }
 
-function normalizeModel(rawModel) {
+function normalizeModel(rawModel: Record<string, unknown>): CodexModel {
   const supportedReasoningEfforts = Array.isArray(rawModel?.supportedReasoningEfforts)
-    ? rawModel.supportedReasoningEfforts
+    ? (rawModel.supportedReasoningEfforts as Record<string, unknown>[])
         .map((entry) => ({
           reasoningEffort: String(entry?.reasoningEffort || ""),
           description: String(entry?.description || ""),
@@ -553,17 +595,17 @@ function normalizeModel(rawModel) {
     defaultReasoningEffort: String(rawModel?.defaultReasoningEffort || ""),
     supportedReasoningEfforts,
     hidden: Boolean(rawModel?.hidden),
-    upgrade: rawModel?.upgrade ?? null,
+    upgrade: (rawModel?.upgrade as string) ?? null,
     upgradeInfo: rawModel?.upgradeInfo
       ? {
-          model: String(rawModel.upgradeInfo.model || ""),
-          migrationMarkdown: rawModel.upgradeInfo.migrationMarkdown ?? null,
-          modelLink: rawModel.upgradeInfo.modelLink ?? null,
-          upgradeCopy: rawModel.upgradeInfo.upgradeCopy ?? null,
+          model: String((rawModel.upgradeInfo as Record<string, unknown>).model || ""),
+          migrationMarkdown: ((rawModel.upgradeInfo as Record<string, unknown>).migrationMarkdown as string) ?? null,
+          modelLink: ((rawModel.upgradeInfo as Record<string, unknown>).modelLink as string) ?? null,
+          upgradeCopy: ((rawModel.upgradeInfo as Record<string, unknown>).upgradeCopy as string) ?? null,
         }
       : null,
     availabilityNux: rawModel?.availabilityNux
-      ? { message: String(rawModel.availabilityNux.message || "") }
+      ? { message: String((rawModel.availabilityNux as Record<string, unknown>).message || "") }
       : null,
   };
 }
@@ -571,7 +613,10 @@ function normalizeModel(rawModel) {
 function resolveCodexBinary({
   platform = process.platform,
   arch = process.arch,
-} = {}) {
+}: {
+  platform?: string;
+  arch?: string;
+} = {}): ResolvedBinary {
   const targetTriple = getTargetTriple(platform, arch);
   const packageName = PLATFORM_PACKAGE_BY_TARGET[targetTriple];
 
@@ -579,7 +624,7 @@ function resolveCodexBinary({
     throw new Error(`Unsupported target triple: ${targetTriple}`);
   }
 
-  let vendorRoot = null;
+  let vendorRoot: string;
   try {
     const packageJsonPath = moduleRequire.resolve(`${packageName}/package.json`);
     vendorRoot = path.join(path.dirname(packageJsonPath), "vendor");
@@ -604,7 +649,7 @@ function resolveCodexBinary({
   };
 }
 
-function buildCodexEnvironment(baseEnv, pathEntries) {
+function buildCodexEnvironment(baseEnv: NodeJS.ProcessEnv, pathEntries: string[]): NodeJS.ProcessEnv {
   const env = { ...baseEnv };
   const pathSeparator = process.platform === "win32" ? ";" : ":";
   const existingPath = env.PATH || "";
@@ -619,7 +664,7 @@ function buildCodexEnvironment(baseEnv, pathEntries) {
   return env;
 }
 
-function getTargetTriple(platform, arch) {
+function getTargetTriple(platform: string, arch: string): string {
   if (platform === "linux" || platform === "android") {
     if (arch === "x64") return "x86_64-unknown-linux-musl";
     if (arch === "arm64") return "aarch64-unknown-linux-musl";
@@ -638,7 +683,7 @@ function getTargetTriple(platform, arch) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
 
-function getProcessStderr(chunks) {
+function getProcessStderr(chunks: Buffer[]): string {
   if (chunks.length === 0) {
     return "";
   }
@@ -646,7 +691,7 @@ function getProcessStderr(chunks) {
   return Buffer.concat(chunks).toString("utf8").trim();
 }
 
-function wrapModelLoadError(error) {
+function wrapModelLoadError(error: unknown): Error {
   const message = normalizeError(error).message;
   if (message.startsWith("Unable to load models from Codex:")) {
     return new Error(message);
@@ -654,7 +699,11 @@ function wrapModelLoadError(error) {
   return new Error(`Unable to load models from Codex: ${message}`);
 }
 
-async function pumpReadableStream(reader, onChunk, onError) {
+async function pumpReadableStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  onChunk: (text: string) => void,
+  onError: (error: unknown) => void,
+): Promise<void> {
   const decoder = new TextDecoder();
 
   try {
@@ -682,7 +731,7 @@ async function pumpReadableStream(reader, onChunk, onError) {
   }
 }
 
-function normalizeError(error) {
+function normalizeError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
   }

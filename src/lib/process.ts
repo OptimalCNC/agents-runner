@@ -1,20 +1,48 @@
 import { spawn } from "node:child_process";
 
-function toError(message, context = {}) {
-  const error = new Error(message);
+import type { CommandResult } from "../types";
+
+interface CommandError extends Error {
+  code?: string | number;
+  signal?: string | null;
+  stdout?: string;
+  stderr?: string;
+  command?: string;
+  args?: string[];
+}
+
+function toError(message: string, context: Record<string, unknown> = {}): CommandError {
+  const error = new Error(message) as CommandError;
   Object.assign(error, context);
   return error;
 }
 
-export function isAbortError(error) {
+export function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const err = error as Record<string, unknown>;
   return (
-    error?.name === "AbortError" ||
-    error?.code === "ABORT_ERR" ||
-    /aborted|cancelled|canceled/i.test(String(error?.message ?? ""))
+    err.name === "AbortError" ||
+    err.code === "ABORT_ERR" ||
+    /aborted|cancelled|canceled/i.test(String(err.message ?? ""))
   );
 }
 
-export function runCommand(command, args, options = {}) {
+export interface RunCommandOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  allowFailure?: boolean;
+  input?: string;
+}
+
+export function runCommand(
+  command: string,
+  args: string[],
+  options: RunCommandOptions = {},
+): Promise<CommandResult> {
   const {
     cwd,
     env,
@@ -34,7 +62,7 @@ export function runCommand(command, args, options = {}) {
     let stderr = "";
     let finished = false;
 
-    const finalize = (handler) => {
+    const finalize = (handler: () => void): void => {
       if (finished) {
         return;
       }
@@ -43,7 +71,7 @@ export function runCommand(command, args, options = {}) {
       handler();
     };
 
-    const abortHandler = () => {
+    const abortHandler = (): void => {
       child.kill("SIGTERM");
       finalize(() => reject(toError(`${command} aborted`, { code: "ABORT_ERR" })));
     };
@@ -60,20 +88,20 @@ export function runCommand(command, args, options = {}) {
     }
     child.stdin.end();
 
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
 
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
-    child.on("error", (error) => {
+    child.on("error", (error: Error) => {
       finalize(() => reject(error));
     });
 
-    child.on("close", (code, receivedSignal) => {
-      const result = {
+    child.on("close", (code: number | null, receivedSignal: string | null) => {
+      const result: CommandResult = {
         code: code ?? 1,
         signal: receivedSignal ?? null,
         stdout,

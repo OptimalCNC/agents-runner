@@ -1,8 +1,24 @@
 import { expect, test } from "bun:test";
 
-import { createCodexModelCatalog, fetchCodexModels } from "./codexModels.js";
+import { createCodexModelCatalog, fetchCodexModels } from "./codexModels";
 
-function buildRawModel(overrides = {}) {
+import type { CodexModel, CodexAppServerClient } from "../types";
+
+interface RawModel {
+  id: string;
+  model: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+  hidden: boolean;
+  defaultReasoningEffort: string;
+  supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
+  upgrade: string | null;
+  upgradeInfo: null;
+  availabilityNux: null;
+}
+
+function buildRawModel(overrides: Partial<RawModel> = {}): RawModel {
   return {
     id: "gpt-5.4",
     model: "gpt-5.4",
@@ -22,7 +38,7 @@ function buildRawModel(overrides = {}) {
   };
 }
 
-function buildExpectedModel(overrides = {}) {
+function buildExpectedModel(overrides: Partial<CodexModel> = {}): CodexModel {
   return {
     model: "gpt-5.4",
     displayName: "gpt-5.4",
@@ -42,12 +58,12 @@ function buildExpectedModel(overrides = {}) {
 }
 
 test("fetchCodexModels initializes the app server and returns one page of visible models", async () => {
-  const calls = [];
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   let closed = 0;
 
   const models = await fetchCodexModels({
-    clientFactory: async () => ({
-      async request(method, params) {
+    clientFactory: async (): Promise<CodexAppServerClient> => ({
+      async request(method: string, params: Record<string, unknown> = {}) {
         calls.push({ method, params });
 
         if (method === "initialize") {
@@ -99,12 +115,12 @@ test("fetchCodexModels initializes the app server and returns one page of visibl
 });
 
 test("fetchCodexModels paginates until Codex stops returning a cursor", async () => {
-  const calls = [];
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   let page = 0;
 
   const models = await fetchCodexModels({
-    clientFactory: async () => ({
-      async request(method, params) {
+    clientFactory: async (): Promise<CodexAppServerClient> => ({
+      async request(method: string, params: Record<string, unknown> = {}) {
         calls.push({ method, params });
 
         if (method === "initialize") {
@@ -184,13 +200,13 @@ test("createCodexModelCatalog surfaces a clear error on cold-start failure", asy
     },
   });
 
-  let thrown = null;
+  let thrown: Error | null = null;
   try {
     await catalog.getModels();
   } catch (error) {
-    thrown = error;
+    thrown = error as Error;
   }
 
   expect(thrown).toBeInstanceOf(Error);
-  expect(thrown.message).toBe("Unable to load models from Codex: auth required");
+  expect(thrown!.message).toBe("Unable to load models from Codex: auth required");
 });

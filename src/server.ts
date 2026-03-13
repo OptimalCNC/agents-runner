@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createCodexModelCatalog } from "./lib/codexModels.js";
-import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git.js";
-import { createBatchStore } from "./lib/batchStore.js";
-import { cancelBatch, deleteBatch, generateBatchTitle, executeBatch, previewBatchDelete } from "./lib/runner.js";
+import { createCodexModelCatalog } from "./lib/codexModels";
+import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git";
+import { createBatchStore } from "./lib/batchStore";
+import { cancelBatch, deleteBatch, generateBatchTitle, executeBatch, previewBatchDelete } from "./lib/runner";
+
+import type { BatchMode } from "./types";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -19,7 +22,7 @@ const port = Number(process.env.PORT || 3000);
 const store = createBatchStore(dataDirectory);
 const modelCatalog = createCodexModelCatalog();
 
-const mimeTypes = {
+const mimeTypes: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -27,7 +30,7 @@ const mimeTypes = {
   ".svg": "image/svg+xml",
 };
 
-function sendJson(response, statusCode, payload) {
+function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
@@ -35,15 +38,15 @@ function sendJson(response, statusCode, payload) {
   response.end(`${JSON.stringify(payload)}\n`);
 }
 
-function sendError(response, statusCode, message) {
+function sendError(response: ServerResponse, statusCode: number, message: string): void {
   sendJson(response, statusCode, { error: message });
 }
 
-function readBody(request) {
+function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let body = "";
 
-    request.on("data", (chunk) => {
+    request.on("data", (chunk: Buffer) => {
       body += chunk.toString();
       if (body.length > 1_000_000) {
         reject(new Error("Request body too large."));
@@ -69,7 +72,7 @@ function readBody(request) {
 }
 
 
-async function hasCodexProfile() {
+async function hasCodexProfile(): Promise<boolean> {
   try {
     await fsp.access(path.join(os.homedir(), ".codex", "auth.json"));
     return true;
@@ -78,11 +81,11 @@ async function hasCodexProfile() {
   }
 }
 
-async function hasCodexCredentials() {
+async function hasCodexCredentials(): Promise<boolean> {
   return Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || await hasCodexProfile());
 }
 
-function normalizeInteger(value, fallback, minimum, maximum) {
+function normalizeInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
   const parsed = Number.parseInt(String(value ?? fallback), 10);
   if (Number.isNaN(parsed)) {
     return fallback;
@@ -90,15 +93,15 @@ function normalizeInteger(value, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, parsed));
 }
 
-function normalizeString(value) {
+function normalizeString(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function normalizeMode(value) {
+function normalizeMode(value: unknown): BatchMode {
   return value === "generated" || value === "task-generator" ? "generated" : "repeated";
 }
 
-function getProjectFolderLabel(projectPath) {
+function getProjectFolderLabel(projectPath: string): string {
   const normalizedPath = String(projectPath ?? "").replace(/[\\/]+$/, "");
   if (!normalizedPath) {
     return "";
@@ -108,13 +111,34 @@ function getProjectFolderLabel(projectPath) {
   return segments.at(-1) || normalizedPath;
 }
 
-function buildFallbackBatchTitle({ mode, runCount, projectPath }) {
+function buildFallbackBatchTitle({ mode, runCount, projectPath }: { mode: BatchMode; runCount: number; projectPath: string }): string {
   const projectLabel = getProjectFolderLabel(projectPath);
   const modeLabel = mode === "generated" ? "Generated" : "Repeated";
   return projectLabel ? `${projectLabel} - ${modeLabel} x${runCount}` : `${modeLabel} x${runCount}`;
 }
 
-function normalizeCreateBatchPayload(body) {
+interface NormalizedCreateBatchPayload {
+  mode: BatchMode;
+  title: string;
+  autoGenerateTitle: boolean;
+  config: {
+    runCount: number;
+    concurrency: number;
+    projectPath: string;
+    worktreeRoot: string;
+    prompt: string;
+    taskPrompt: string;
+    baseRef: string;
+    model: string;
+    sandboxMode: string;
+    approvalPolicy: string;
+    networkAccessEnabled: boolean;
+    webSearchMode: string;
+    reasoningEffort: string;
+  };
+}
+
+function normalizeCreateBatchPayload(body: Record<string, unknown>): NormalizedCreateBatchPayload {
   const mode = normalizeMode(body.mode ?? body.workflowType);
   const runCount = normalizeInteger(body.runCount, 10, 1, 50);
   const concurrency = normalizeInteger(body.concurrency, runCount, 1, runCount);
@@ -163,13 +187,13 @@ function normalizeCreateBatchPayload(body) {
   };
 }
 
-function normalizeDeleteBatchPayload(body) {
+function normalizeDeleteBatchPayload(body: Record<string, unknown>): { removeWorktrees: boolean } {
   return {
     removeWorktrees: Boolean(body.removeWorktrees),
   };
 }
 
-async function serveStaticFile(response, pathname) {
+async function serveStaticFile(response: ServerResponse, pathname: string): Promise<void> {
   const relativePath = pathname === "/" ? "/index.html" : pathname;
   const targetPath = path.normalize(path.join(publicDirectory, relativePath));
 
@@ -191,7 +215,7 @@ async function serveStaticFile(response, pathname) {
     });
     fs.createReadStream(targetPath).pipe(response);
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       sendError(response, 404, "Not found.");
       return;
     }
@@ -200,7 +224,7 @@ async function serveStaticFile(response, pathname) {
   }
 }
 
-async function handleApi(request, response, url) {
+async function handleApi(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
   if (request.method === "GET" && url.pathname === "/api/config") {
     sendJson(response, 200, {
       cwd: projectRoot,
@@ -214,7 +238,6 @@ async function handleApi(request, response, url) {
       codexEnvironment: {
         hasOpenAIApiKey: Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY),
         hasCodexProfile: await hasCodexProfile(),
-
       },
     });
     return;
@@ -247,12 +270,12 @@ async function handleApi(request, response, url) {
     const batch = store.createBatch(payload);
 
     if (payload.autoGenerateTitle) {
-      void generateBatchTitle(store, batch.id).catch((error) => {
+      void generateBatchTitle(store, batch.id).catch((error: unknown) => {
         console.error(`Batch ${batch.id} title generation failed`, error);
       });
     }
 
-    void executeBatch(store, batch.id).catch((error) => {
+    void executeBatch(store, batch.id).catch((error: unknown) => {
       console.error(`Batch ${batch.id} failed`, error);
     });
 
@@ -336,10 +359,10 @@ async function handleApi(request, response, url) {
 
       sendJson(response, 200, result);
     } catch (error) {
-      if (error?.statusCode === 409) {
+      if ((error as { statusCode?: number })?.statusCode === 409) {
         sendJson(response, 409, {
-          error: error.message || "Failed to remove worktrees.",
-          details: error.details || null,
+          error: (error as Error).message || "Failed to remove worktrees.",
+          details: (error as { details?: unknown }).details || null,
         });
         return;
       }
@@ -393,11 +416,11 @@ async function handleApi(request, response, url) {
   sendError(response, 404, "Not found.");
 }
 
-async function main() {
+async function main(): Promise<void> {
   await store.load();
 
   const server = http.createServer(async (request, response) => {
-    const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    const url = new URL(request.url!, `http://${request.headers.host || "localhost"}`);
 
     try {
       if (url.pathname.startsWith("/api/") || url.pathname === "/events") {
@@ -409,7 +432,7 @@ async function main() {
     } catch (error) {
       console.error("Request failed", error);
       if (!response.headersSent) {
-        sendError(response, 500, error.message || "Internal server error.");
+        sendError(response, 500, (error as Error).message || "Internal server error.");
       } else {
         response.end();
       }
@@ -421,7 +444,7 @@ async function main() {
   });
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   console.error("Server failed to start", error);
   process.exitCode = 1;
 });

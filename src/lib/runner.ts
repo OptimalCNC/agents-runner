@@ -9,25 +9,44 @@ import {
   inspectWorktreeChanges,
   pruneWorktrees,
   removeWorktree,
-} from "./git.js";
-import { isAbortError } from "./process.js";
+} from "./git";
+import { isAbortError } from "./process";
+
+import type {
+  Batch,
+  BatchStatus,
+  BatchStore,
+  GenerationTask,
+  ProjectContext,
+  Run,
+  RunLog,
+  StreamItem,
+  WorktreeRemovalResult,
+} from "../types";
 
 const MAX_LOG_ENTRIES = 160;
 const MAX_TEXT_LENGTH = 24_000;
 const WORKTREE_REMOVE_RETRY_DELAY_MS = 500;
 const WORKTREE_REMOVE_RETRY_ATTEMPTS = 6;
 const BATCH_SETTLE_TIMEOUT_MS = 5_000;
-const executionRegistry = new Map();
 
-function nowIso() {
+interface ExecutionState {
+  titleController: AbortController | null;
+  generationController: AbortController | null;
+  runControllers: Map<string, AbortController>;
+}
+
+const executionRegistry = new Map<string, ExecutionState>();
+
+function nowIso(): string {
   return new Date().toISOString();
 }
 
-function sleep(ms) {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function truncateText(value, limit = MAX_TEXT_LENGTH) {
+function truncateText(value: unknown, limit: number = MAX_TEXT_LENGTH): string {
   const text = String(value ?? "");
   if (text.length <= limit) {
     return text;
@@ -36,7 +55,7 @@ function truncateText(value, limit = MAX_TEXT_LENGTH) {
   return `${text.slice(0, limit)}\n\n...truncated...`;
 }
 
-function compactJson(value) {
+function compactJson(value: unknown): unknown {
   try {
     return JSON.parse(JSON.stringify(value));
   } catch {
@@ -44,12 +63,12 @@ function compactJson(value) {
   }
 }
 
-function sanitizeItem(item) {
+function sanitizeItem(item: unknown): StreamItem {
   if (!item || typeof item !== "object") {
-    return item;
+    return item as StreamItem;
   }
 
-  const clone = compactJson(item);
+  const clone = compactJson(item) as Record<string, unknown>;
 
   if (clone.type === "command_execution") {
     clone.aggregated_output = truncateText(clone.aggregated_output ?? "");
@@ -71,10 +90,10 @@ function sanitizeItem(item) {
     clone.message = truncateText(clone.message ?? "", 4_000);
   }
 
-  return clone;
+  return clone as unknown as StreamItem;
 }
 
-function upsertItem(run, item) {
+function upsertItem(run: Run, item: unknown): void {
   const nextItem = sanitizeItem(item);
   const existingIndex = run.items.findIndex((entry) => entry.id === nextItem.id);
 
@@ -85,7 +104,7 @@ function upsertItem(run, item) {
   }
 }
 
-function appendLog(run, level, message) {
+function appendLog(run: Run, level: string, message: string): void {
   run.logs.push({
     at: nowIso(),
     level,
@@ -97,15 +116,14 @@ function appendLog(run, level, message) {
   }
 }
 
-function getCodexClient() {
+function getCodexClient(): InstanceType<typeof Codex> {
   return new Codex({
     apiKey: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
     baseUrl: process.env.OPENAI_BASE_URL || process.env.CODEX_BASE_URL,
-
   });
 }
 
-function getExecutionState(batchId) {
+function getExecutionState(batchId: string): ExecutionState {
   if (!executionRegistry.has(batchId)) {
     executionRegistry.set(batchId, {
       titleController: null,
@@ -114,14 +132,14 @@ function getExecutionState(batchId) {
     });
   }
 
-  return executionRegistry.get(batchId);
+  return executionRegistry.get(batchId)!;
 }
 
-function clearExecutionState(batchId) {
+function clearExecutionState(batchId: string): void {
   executionRegistry.delete(batchId);
 }
 
-function maybeClearExecutionState(batchId, execution) {
+function maybeClearExecutionState(batchId: string, execution: ExecutionState | undefined): void {
   if (!execution) {
     return;
   }
@@ -135,7 +153,7 @@ function maybeClearExecutionState(batchId, execution) {
   }
 }
 
-function abortBatchExecution(batchId) {
+function abortBatchExecution(batchId: string): void {
   const execution = executionRegistry.get(batchId);
   execution?.titleController?.abort();
   execution?.generationController?.abort();
@@ -144,15 +162,36 @@ function abortBatchExecution(batchId) {
   }
 }
 
-function getBatchWorktreeRuns(batch) {
+function getBatchWorktreeRuns(batch: Batch): Run[] {
   return batch.runs.filter((run) => Boolean(run.worktreePath));
 }
 
-async function buildBatchWorktreePreview(batch) {
+interface WorktreePreviewEntry {
+  runId: string;
+  runIndex: number;
+  runTitle: string;
+  worktreePath: string;
+  isDirty: boolean;
+  changeCount: number;
+  trackedChangeCount: number;
+  untrackedChangeCount: number;
+  exists: boolean;
+  error: string;
+}
+
+interface BatchWorktreePreview {
+  batchId: string;
+  worktreeCount: number;
+  dirtyWorktreeCount: number;
+  inspectFailureCount: number;
+  worktrees: WorktreePreviewEntry[];
+}
+
+async function buildBatchWorktreePreview(batch: Batch): Promise<BatchWorktreePreview> {
   const worktreeRuns = getBatchWorktreeRuns(batch);
-  const worktrees = await Promise.all(
+  const worktrees: WorktreePreviewEntry[] = await Promise.all(
     worktreeRuns.map(async (run) => {
-      const summary = await inspectWorktreeChanges(run.worktreePath);
+      const summary = await inspectWorktreeChanges(run.worktreePath!);
       return {
         runId: run.id,
         runIndex: run.index,
@@ -180,7 +219,7 @@ async function buildBatchWorktreePreview(batch) {
   };
 }
 
-async function resolveBatchRepoRoot(batch) {
+async function resolveBatchRepoRoot(batch: Batch): Promise<string> {
   if (batch.projectContext?.repoRoot) {
     return batch.projectContext.repoRoot;
   }
@@ -189,7 +228,7 @@ async function resolveBatchRepoRoot(batch) {
   return projectContext.repoRoot;
 }
 
-function buildCleanupFailureMessage(failedEntries) {
+function buildCleanupFailureMessage(failedEntries: Array<{ runTitle: string; error: string }>): string {
   if (failedEntries.length === 0) {
     return "";
   }
@@ -204,7 +243,10 @@ function buildCleanupFailureMessage(failedEntries) {
 }
 
 class BatchDeleteCleanupError extends Error {
-  constructor(message, details = {}) {
+  statusCode: number;
+  details: Record<string, unknown>;
+
+  constructor(message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = "BatchDeleteCleanupError";
     this.statusCode = 409;
@@ -212,11 +254,11 @@ class BatchDeleteCleanupError extends Error {
   }
 }
 
-function hasActiveRuns(batch) {
-  return batch?.runs.some((run) => run.status === "running" || run.status === "queued");
+function hasActiveRuns(batch: Batch | null): boolean {
+  return batch?.runs.some((run) => run.status === "running" || run.status === "queued") ?? false;
 }
 
-async function waitForBatchToSettle(store, batchId, timeoutMs = BATCH_SETTLE_TIMEOUT_MS) {
+async function waitForBatchToSettle(store: BatchStore, batchId: string, timeoutMs: number = BATCH_SETTLE_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -229,14 +271,17 @@ async function waitForBatchToSettle(store, batchId, timeoutMs = BATCH_SETTLE_TIM
   }
 }
 
-function isRetryableWorktreeRemovalError(message) {
+function isRetryableWorktreeRemovalError(message: string | null | undefined): boolean {
   return /permission denied|resource busy|in use|being used|device or resource busy|access is denied/i.test(
     String(message ?? ""),
   );
 }
 
-async function removeWorktreeWithRetries(repoRoot, entry) {
-  let result = null;
+async function removeWorktreeWithRetries(
+  repoRoot: string,
+  entry: WorktreePreviewEntry,
+): Promise<WorktreeRemovalResult> {
+  let result: WorktreeRemovalResult | null = null;
 
   for (let attempt = 0; attempt < WORKTREE_REMOVE_RETRY_ATTEMPTS; attempt += 1) {
     result = await removeWorktree(repoRoot, entry.worktreePath);
@@ -247,10 +292,10 @@ async function removeWorktreeWithRetries(repoRoot, entry) {
     await sleep(WORKTREE_REMOVE_RETRY_DELAY_MS);
   }
 
-  return result;
+  return result!;
 }
 
-function buildRunRecord(task, index) {
+function buildRunRecord(task: GenerationTask, index: number): Run {
   return {
     id: `run-${index + 1}-${Math.random().toString(36).slice(2, 8)}`,
     index,
@@ -272,7 +317,7 @@ function buildRunRecord(task, index) {
   };
 }
 
-function buildTaskSchema(count) {
+function buildTaskSchema(count: number): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
@@ -296,7 +341,7 @@ function buildTaskSchema(count) {
   };
 }
 
-function buildTaskGenerationPrompt(userPrompt, count) {
+function buildTaskGenerationPrompt(userPrompt: string, count: number): string {
   return [
     userPrompt.trim(),
     "",
@@ -308,7 +353,7 @@ function buildTaskGenerationPrompt(userPrompt, count) {
   ].join("\n");
 }
 
-function getProjectFolderName(projectPath) {
+function getProjectFolderName(projectPath: string | null | undefined): string {
   const normalizedPath = String(projectPath ?? "").trim().replace(/[\\/]+$/, "");
   if (!normalizedPath) {
     return "";
@@ -318,7 +363,7 @@ function getProjectFolderName(projectPath) {
   return parts.at(-1) || normalizedPath;
 }
 
-function buildBatchTitleSchema() {
+function buildBatchTitleSchema(): Record<string, unknown> {
   return {
     type: "object",
     additionalProperties: false,
@@ -329,7 +374,7 @@ function buildBatchTitleSchema() {
   };
 }
 
-function buildBatchTitlePrompt(batch) {
+function buildBatchTitlePrompt(batch: Batch): string {
   const sourcePrompt = batch.mode === "generated" ? batch.config.taskPrompt : batch.config.prompt;
   const projectFolder = getProjectFolderName(batch.config.projectPath);
 
@@ -351,7 +396,7 @@ function buildBatchTitlePrompt(batch) {
   ].join("\n");
 }
 
-function sanitizeGeneratedTitle(value, fallback) {
+function sanitizeGeneratedTitle(value: unknown, fallback: string): string {
   const normalized = String(value ?? "")
     .trim()
     .replace(/^["'`]+|["'`]+$/g, "")
@@ -365,18 +410,18 @@ function sanitizeGeneratedTitle(value, fallback) {
   return normalized.slice(0, 80);
 }
 
-function describeItem(item) {
+function describeItem(item: Record<string, unknown>): string {
   switch (item.type) {
     case "command_execution":
       return `${item.status === "failed" ? "Command failed" : "Command"}: ${item.command}`;
     case "file_change":
-      return `Patch ${item.status}: ${(item.changes || []).map((change) => change.path).join(", ") || "file updates"}`;
+      return `Patch ${item.status}: ${((item.changes as Array<{ path: string }>) || []).map((change) => change.path).join(", ") || "file updates"}`;
     case "agent_message":
       return "Codex produced a response.";
     case "reasoning":
       return "Reasoning summary updated.";
     case "todo_list":
-      return `Todo list updated (${item.items.filter((entry) => entry.completed).length}/${item.items.length}).`;
+      return `Todo list updated (${(item.items as Array<{ completed: boolean }>).filter((entry) => entry.completed).length}/${(item.items as Array<{ completed: boolean }>).length}).`;
     case "mcp_tool_call":
       return `${item.server}.${item.tool} ${item.status}`;
     case "web_search":
@@ -384,11 +429,11 @@ function describeItem(item) {
     case "error":
       return `Error: ${item.message}`;
     default:
-      return item.type;
+      return item.type as string;
   }
 }
 
-function deriveBatchStatus(batch) {
+function deriveBatchStatus(batch: Batch): BatchStatus {
   if (batch.cancelRequested && batch.runs.every((run) => run.status === "cancelled" || run.status === "completed" || run.status === "failed")) {
     return "cancelled";
   }
@@ -412,29 +457,29 @@ function deriveBatchStatus(batch) {
   return "queued";
 }
 
-async function generateTasks(store, batchId, projectContext) {
-  const batch = store.getBatch(batchId);
+async function generateTasks(store: BatchStore, batchId: string, projectContext: ProjectContext): Promise<GenerationTask[]> {
+  const batch = store.getBatch(batchId)!;
   const execution = getExecutionState(batchId);
   const controller = new AbortController();
   execution.generationController = controller;
 
   store.updateBatch(batchId, (mutableBatch) => {
-    mutableBatch.generation.status = "running";
-    mutableBatch.generation.startedAt = nowIso();
-    mutableBatch.generation.error = null;
+    mutableBatch.generation!.status = "running";
+    mutableBatch.generation!.startedAt = nowIso();
+    mutableBatch.generation!.error = null;
   });
 
   try {
     const codex = getCodexClient();
     const thread = codex.startThread({
       model: batch.config.model || undefined,
-      sandboxMode: batch.config.sandboxMode,
-      approvalPolicy: batch.config.approvalPolicy,
+      sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
+      approvalPolicy: batch.config.approvalPolicy as "never" | "on-request" | "on-failure" | "untrusted",
       workingDirectory: projectContext.projectPath,
       networkAccessEnabled: batch.config.networkAccessEnabled,
       webSearchEnabled: batch.config.webSearchMode !== "disabled",
-      webSearchMode: batch.config.webSearchMode,
-      modelReasoningEffort: batch.config.reasoningEffort || undefined,
+      webSearchMode: batch.config.webSearchMode as "disabled" | "live",
+      modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
     });
 
     const result = await thread.run(buildTaskGenerationPrompt(batch.config.taskPrompt, batch.config.runCount), {
@@ -442,26 +487,26 @@ async function generateTasks(store, batchId, projectContext) {
       outputSchema: buildTaskSchema(batch.config.runCount),
     });
 
-    const parsed = JSON.parse(result.finalResponse);
-    const tasks = parsed.tasks.map((task, index) => ({
+    const parsed = JSON.parse(result.finalResponse) as { tasks: Array<{ title?: string; prompt: string }> };
+    const tasks: GenerationTask[] = parsed.tasks.map((task, index) => ({
       title: task.title || `Task ${index + 1}`,
       prompt: task.prompt,
     }));
 
     store.updateBatch(batchId, (mutableBatch) => {
-      mutableBatch.generation.status = "completed";
-      mutableBatch.generation.completedAt = nowIso();
-      mutableBatch.generation.tasks = tasks;
+      mutableBatch.generation!.status = "completed";
+      mutableBatch.generation!.completedAt = nowIso();
+      mutableBatch.generation!.tasks = tasks;
     });
 
     return tasks;
   } catch (error) {
-    const message = isAbortError(error) ? "Task generation cancelled." : error.message;
+    const message = isAbortError(error) ? "Task generation cancelled." : (error as Error).message;
 
     store.updateBatch(batchId, (mutableBatch) => {
-      mutableBatch.generation.status = isAbortError(error) ? "cancelled" : "failed";
-      mutableBatch.generation.completedAt = nowIso();
-      mutableBatch.generation.error = message;
+      mutableBatch.generation!.status = isAbortError(error) ? "cancelled" : "failed";
+      mutableBatch.generation!.completedAt = nowIso();
+      mutableBatch.generation!.error = message;
       mutableBatch.error = message;
     });
 
@@ -472,7 +517,7 @@ async function generateTasks(store, batchId, projectContext) {
   }
 }
 
-export async function generateBatchTitle(store, batchId) {
+export async function generateBatchTitle(store: BatchStore, batchId: string): Promise<string | null> {
   const batch = store.getBatch(batchId);
   if (!batch) {
     return null;
@@ -505,7 +550,7 @@ export async function generateBatchTitle(store, batchId) {
       outputSchema: buildBatchTitleSchema(),
     });
 
-    const parsed = JSON.parse(result.finalResponse);
+    const parsed = JSON.parse(result.finalResponse) as { title?: string };
     const nextTitle = sanitizeGeneratedTitle(parsed.title, batch.title);
 
     store.updateBatch(batchId, (mutableBatch) => {
@@ -524,14 +569,14 @@ export async function generateBatchTitle(store, batchId) {
   }
 }
 
-async function executeRun(store, batchId, runId, projectContext) {
-  const batch = store.getBatch(batchId);
-  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+async function executeRun(store: BatchStore, batchId: string, runId: string, projectContext: ProjectContext): Promise<void> {
+  const batch = store.getBatch(batchId)!;
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId)!;
   const execution = getExecutionState(batchId);
   const controller = new AbortController();
   execution.runControllers.set(runId, controller);
 
-  let worktreePath = null;
+  let worktreePath: string | null = null;
 
   store.updateRun(batchId, runId, (run) => {
     run.status = "running";
@@ -566,13 +611,13 @@ async function executeRun(store, batchId, runId, projectContext) {
     const codex = getCodexClient();
     const thread = codex.startThread({
       model: batch.config.model || undefined,
-      sandboxMode: batch.config.sandboxMode,
-      approvalPolicy: batch.config.approvalPolicy,
+      sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
+      approvalPolicy: batch.config.approvalPolicy as "never" | "on-request" | "on-failure" | "untrusted",
       workingDirectory,
       networkAccessEnabled: batch.config.networkAccessEnabled,
       webSearchEnabled: batch.config.webSearchMode !== "disabled",
-      webSearchMode: batch.config.webSearchMode,
-      modelReasoningEffort: batch.config.reasoningEffort || undefined,
+      webSearchMode: batch.config.webSearchMode as "disabled" | "live",
+      modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
     });
 
     const { events } = await thread.runStreamed(runSnapshot.prompt, {
@@ -581,44 +626,45 @@ async function executeRun(store, batchId, runId, projectContext) {
 
     for await (const event of events) {
       store.updateRun(batchId, runId, (run) => {
-        switch (event.type) {
+        const evt = event as Record<string, unknown>;
+        switch (evt.type) {
           case "thread.started":
-            run.threadId = event.thread_id;
-            appendLog(run, "info", `Thread started: ${event.thread_id}`);
+            run.threadId = evt.thread_id as string;
+            appendLog(run, "info", `Thread started: ${evt.thread_id}`);
             break;
           case "turn.started":
             appendLog(run, "info", "Codex turn started.");
             break;
           case "turn.completed":
-            run.usage = event.usage;
-            appendLog(run, "info", event.usage
-              ? `Turn completed. Tokens in/out: ${event.usage.input_tokens}/${event.usage.output_tokens}.`
+            run.usage = evt.usage as Run["usage"];
+            appendLog(run, "info", evt.usage
+              ? `Turn completed. Tokens in/out: ${(evt.usage as Record<string, unknown>).input_tokens}/${(evt.usage as Record<string, unknown>).output_tokens}.`
               : "Turn completed.");
             break;
           case "turn.failed":
-            run.error = event.error.message;
-            appendLog(run, "error", event.error.message);
+            run.error = (evt.error as Record<string, unknown>).message as string;
+            appendLog(run, "error", (evt.error as Record<string, unknown>).message as string);
             break;
           case "item.started":
-            upsertItem(run, event.item);
-            appendLog(run, "info", describeItem(event.item));
+            upsertItem(run, evt.item);
+            appendLog(run, "info", describeItem(evt.item as Record<string, unknown>));
             break;
           case "item.updated":
-            upsertItem(run, event.item);
+            upsertItem(run, evt.item);
             break;
           case "item.completed":
-            upsertItem(run, event.item);
-            if (event.item.type === "agent_message") {
-              run.finalResponse = truncateText(event.item.text ?? "");
+            upsertItem(run, evt.item);
+            if ((evt.item as Record<string, unknown>).type === "agent_message") {
+              run.finalResponse = truncateText((evt.item as Record<string, unknown>).text ?? "");
             }
-            if (event.item.type === "error") {
-              run.error = event.item.message;
+            if ((evt.item as Record<string, unknown>).type === "error") {
+              run.error = (evt.item as Record<string, unknown>).message as string;
             }
-            appendLog(run, "info", describeItem(event.item));
+            appendLog(run, "info", describeItem(evt.item as Record<string, unknown>));
             break;
           case "error":
-            run.error = event.message;
-            appendLog(run, "error", event.message);
+            run.error = evt.message as string;
+            appendLog(run, "error", evt.message as string);
             break;
           default:
             break;
@@ -644,9 +690,9 @@ async function executeRun(store, batchId, runId, projectContext) {
     store.updateRun(batchId, runId, (run) => {
       run.status = cancelled ? "cancelled" : "failed";
       run.completedAt = nowIso();
-      run.error = cancelled ? "Batch cancelled." : error.message;
+      run.error = cancelled ? "Batch cancelled." : (error as Error).message;
       run.review = review ?? run.review;
-      appendLog(run, cancelled ? "warning" : "error", run.error);
+      appendLog(run, cancelled ? "warning" : "error", run.error!);
     });
   } finally {
     execution.runControllers.delete(runId);
@@ -654,7 +700,7 @@ async function executeRun(store, batchId, runId, projectContext) {
   }
 }
 
-async function runWithConcurrency(items, concurrency, worker) {
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
   let index = 0;
   const activeWorkers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
     while (true) {
@@ -672,7 +718,7 @@ async function runWithConcurrency(items, concurrency, worker) {
   await Promise.all(activeWorkers);
 }
 
-export async function executeBatch(store, batchId) {
+export async function executeBatch(store: BatchStore, batchId: string): Promise<void> {
   const batch = store.getBatch(batchId);
   if (!batch) {
     return;
@@ -691,7 +737,7 @@ export async function executeBatch(store, batchId) {
       mutableBatch.projectContext = projectContext;
     });
 
-    const tasks =
+    const tasks: GenerationTask[] =
       batch.mode === "generated"
         ? await generateTasks(store, batchId, projectContext)
         : Array.from({ length: batch.config.runCount }, (_, index) => ({
@@ -703,7 +749,7 @@ export async function executeBatch(store, batchId) {
       store.appendRun(batchId, buildRunRecord(task, index));
     }
 
-    const latestBatch = store.getBatch(batchId);
+    const latestBatch = store.getBatch(batchId)!;
     await runWithConcurrency(latestBatch.runs, latestBatch.config.concurrency, async (run) => {
       const mutableBatch = store.getMutableBatch(batchId);
       if (!mutableBatch || mutableBatch.cancelRequested) {
@@ -711,7 +757,7 @@ export async function executeBatch(store, batchId) {
           mutableRun.status = "cancelled";
           mutableRun.completedAt = nowIso();
           mutableRun.error = "Batch cancelled before start.";
-          appendLog(mutableRun, "warning", mutableRun.error);
+          appendLog(mutableRun, "warning", mutableRun.error!);
         });
         return;
       }
@@ -729,7 +775,7 @@ export async function executeBatch(store, batchId) {
     store.updateBatch(batchId, (mutableBatch) => {
       mutableBatch.status = cancelled ? "cancelled" : "failed";
       mutableBatch.completedAt = nowIso();
-      mutableBatch.error = cancelled ? "Batch cancelled." : error.message;
+      mutableBatch.error = cancelled ? "Batch cancelled." : (error as Error).message;
 
       for (const run of mutableBatch.runs) {
         if (run.status === "queued") {
@@ -750,7 +796,7 @@ export async function executeBatch(store, batchId) {
   }
 }
 
-export function cancelBatch(store, batchId) {
+export function cancelBatch(store: BatchStore, batchId: string): Batch | null {
   const batch = store.getMutableBatch(batchId);
   if (!batch) {
     return null;
@@ -768,7 +814,7 @@ export function cancelBatch(store, batchId) {
   return store.getBatch(batchId);
 }
 
-export async function previewBatchDelete(store, batchId) {
+export async function previewBatchDelete(store: BatchStore, batchId: string): Promise<BatchWorktreePreview | null> {
   const batch = store.getBatch(batchId);
   if (!batch) {
     return null;
@@ -777,7 +823,24 @@ export async function previewBatchDelete(store, batchId) {
   return buildBatchWorktreePreview(batch);
 }
 
-export async function deleteBatch(store, batchId, options = {}) {
+export interface DeleteBatchOptions {
+  removeWorktrees?: boolean;
+}
+
+interface WorktreeCleanupResult {
+  removedCount: number;
+  failedCount: number;
+  worktrees: Array<WorktreePreviewEntry & { removed: boolean; error: string }>;
+  pruneError: string;
+}
+
+export interface DeleteBatchResult {
+  batch: Batch | null;
+  deletePreview: BatchWorktreePreview | null;
+  cleanup: WorktreeCleanupResult | null;
+}
+
+export async function deleteBatch(store: BatchStore, batchId: string, options: DeleteBatchOptions = {}): Promise<DeleteBatchResult | null> {
   const batch = store.getMutableBatch(batchId);
   if (!batch) {
     return null;
@@ -788,18 +851,18 @@ export async function deleteBatch(store, batchId, options = {}) {
   abortBatchExecution(batchId);
   store.updateBatch(batchId, () => {});
 
-  let deletePreview = null;
-  let cleanup = null;
+  let deletePreview: BatchWorktreePreview | null = null;
+  let cleanup: WorktreeCleanupResult | null = null;
   if (removeWorktreesRequested) {
     await waitForBatchToSettle(store, batchId);
     deletePreview = await buildBatchWorktreePreview(batch);
 
     if (deletePreview.worktreeCount > 0) {
-      let repoRoot;
+      let repoRoot: string;
       try {
         repoRoot = await resolveBatchRepoRoot(batch);
       } catch (error) {
-        throw new BatchDeleteCleanupError(`Failed to resolve the repository root for worktree cleanup. ${error.message}`, {
+        throw new BatchDeleteCleanupError(`Failed to resolve the repository root for worktree cleanup. ${(error as Error).message}`, {
           deletePreview,
           cleanup: null,
         });

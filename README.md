@@ -2,6 +2,16 @@
 
 A lightweight web UI for running multiple Codex SDK runs in parallel, each isolated in its own git worktree. Runs are organized into batches.
 
+## Project Scope & Design Philosophy
+
+1. **Local-first tool** &mdash; Users run the server on their own machine. This is not a hosted service.
+2. **Multi-agent architecture** &mdash; Currently supports the Codex SDK. Designed to support additional agent SDKs in the future, but not prematurely abstracted.
+3. **Workflow-oriented batch processing** &mdash; Batches are the core unit. Current workflows:
+   - **Repeated**: Same prompt dispatched to N parallel agents.
+   - **Generated**: A meta-prompt produces N distinct tasks, each executed by its own agent.
+   - Future: Multi-stage pipelines (e.g., Generate &rarr; Execute &rarr; Score &rarr; Rank).
+4. **Developer-extensible, not user-configurable** &mdash; Users don't build workflows via the UI. Instead, they clone the repo, launch a coding agent, and ask it to implement custom workflows by modifying the source code. The codebase is organized to make this easy.
+
 ## Quick Start
 
 **Requirements:** [Bun](https://bun.sh/) 1.0+ and Git (used to create isolated worktrees for each run).

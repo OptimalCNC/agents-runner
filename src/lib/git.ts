@@ -2,11 +2,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { runCommand } from "./process.js";
+import { runCommand } from "./process";
+
+import type {
+  DirectoryListing,
+  ProjectContext,
+  RunReview,
+  RunReviewUntrackedFile,
+  WorktreeInspection,
+  WorktreeRemovalResult,
+  PruneResult,
+} from "../types";
 
 const MAX_UNTRACKED_PREVIEW_BYTES = 20_000;
 
-function sanitizeSegment(value) {
+function sanitizeSegment(value: string): string {
   return String(value)
     .trim()
     .toLowerCase()
@@ -14,11 +24,11 @@ function sanitizeSegment(value) {
     .replace(/^-+|-+$/g, "") || "run";
 }
 
-function isTextBuffer(buffer) {
+function isTextBuffer(buffer: Buffer): boolean {
   return !buffer.includes(0);
 }
 
-function truncateText(value, limit = MAX_UNTRACKED_PREVIEW_BYTES) {
+function truncateText(value: string, limit: number = MAX_UNTRACKED_PREVIEW_BYTES): string {
   if (value.length <= limit) {
     return value;
   }
@@ -26,11 +36,11 @@ function truncateText(value, limit = MAX_UNTRACKED_PREVIEW_BYTES) {
   return `${value.slice(0, limit)}\n\n...truncated...`;
 }
 
-function isCommitLikeRef(value) {
+function isCommitLikeRef(value: string): boolean {
   return /^[0-9a-f]{5,40}$/i.test(String(value).trim());
 }
 
-function normalizeRefName(value) {
+function normalizeRefName(value: string): string {
   const ref = String(value).trim();
 
   if (ref.startsWith("refs/heads/")) {
@@ -48,7 +58,13 @@ function normalizeRefName(value) {
   return ref;
 }
 
-function deriveWorktreeRefSegment({ baseRef, branchName, headSha }) {
+interface WorktreeRefInput {
+  baseRef?: string;
+  branchName?: string;
+  headSha: string;
+}
+
+function deriveWorktreeRefSegment({ baseRef, branchName, headSha }: WorktreeRefInput): string {
   if (baseRef) {
     return isCommitLikeRef(baseRef)
       ? baseRef.slice(0, 5).toLowerCase()
@@ -62,11 +78,11 @@ function deriveWorktreeRefSegment({ baseRef, branchName, headSha }) {
   return headSha.slice(0, 5).toLowerCase();
 }
 
-function deriveWorktreeProjectSegment(projectPath) {
+function deriveWorktreeProjectSegment(projectPath: string): string {
   return sanitizeSegment(path.basename(projectPath));
 }
 
-export async function inspectProject(projectPath) {
+export async function inspectProject(projectPath: string): Promise<ProjectContext> {
   const requestedPath = await fs.realpath(projectPath);
   const repoRoot = (
     await runCommand("git", ["-C", requestedPath, "rev-parse", "--show-toplevel"])
@@ -91,9 +107,19 @@ export async function inspectProject(projectPath) {
   };
 }
 
-export async function ensureDirectory(targetPath) {
+export async function ensureDirectory(targetPath: string): Promise<string> {
   await fs.mkdir(targetPath, { recursive: true });
   return fs.realpath(targetPath).catch(() => path.resolve(targetPath));
+}
+
+export interface CreateWorktreeOptions {
+  repoRoot: string;
+  projectPath: string;
+  worktreeRoot: string;
+  baseRef: string;
+  branchName: string;
+  headSha: string;
+  runIndex: number;
 }
 
 export async function createWorktree({
@@ -104,7 +130,7 @@ export async function createWorktree({
   branchName,
   headSha,
   runIndex,
-}) {
+}: CreateWorktreeOptions): Promise<string> {
   const resolvedRoot = await ensureDirectory(worktreeRoot);
   const projectSegment = deriveWorktreeProjectSegment(projectPath);
   const refSegment = deriveWorktreeRefSegment({ baseRef, branchName, headSha });
@@ -127,7 +153,7 @@ export async function createWorktree({
   return candidate;
 }
 
-export async function collectWorktreeReview(worktreePath) {
+export async function collectWorktreeReview(worktreePath: string): Promise<RunReview> {
   const [statusShort, diffStat, trackedDiff, untracked] = await Promise.all([
     runCommand("git", ["-C", worktreePath, "status", "--short"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "diff", "--stat"], { allowFailure: true }),
@@ -139,7 +165,7 @@ export async function collectWorktreeReview(worktreePath) {
     }),
   ]);
 
-  const untrackedFiles = [];
+  const untrackedFiles: RunReviewUntrackedFile[] = [];
   const untrackedNames = untracked.stdout
     .split("\n")
     .map((value) => value.trim())
@@ -152,14 +178,14 @@ export async function collectWorktreeReview(worktreePath) {
       const buffer = await fs.readFile(absoluteFile);
       untrackedFiles.push({
         path: relativeFile,
-        preview: isTextBuffer(buffer)
-          ? truncateText(buffer.toString("utf8"))
+        preview: isTextBuffer(buffer as Buffer)
+          ? truncateText((buffer as Buffer).toString("utf8"))
           : "Binary file preview unavailable.",
       });
     } catch (error) {
       untrackedFiles.push({
         path: relativeFile,
-        preview: `Unable to read file: ${error.message}`,
+        preview: `Unable to read file: ${(error as Error).message}`,
       });
     }
   }
@@ -172,7 +198,14 @@ export async function collectWorktreeReview(worktreePath) {
   };
 }
 
-function parseStatusLineCounts(statusOutput) {
+interface StatusLineCounts {
+  statusEntries: string[];
+  trackedChangeCount: number;
+  untrackedChangeCount: number;
+  changeCount: number;
+}
+
+function parseStatusLineCounts(statusOutput: string | null | undefined): StatusLineCounts {
   const lines = String(statusOutput ?? "")
     .split("\n")
     .map((value) => value.trimEnd())
@@ -198,7 +231,7 @@ function parseStatusLineCounts(statusOutput) {
   };
 }
 
-export async function inspectWorktreeChanges(worktreePath) {
+export async function inspectWorktreeChanges(worktreePath: string): Promise<WorktreeInspection> {
   const resolvedPath = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
   const exists = await fs.access(resolvedPath).then(() => true).catch(() => false);
   const status = await runCommand(
@@ -222,7 +255,7 @@ export async function inspectWorktreeChanges(worktreePath) {
   };
 }
 
-export async function removeWorktree(repoRoot, worktreePath) {
+export async function removeWorktree(repoRoot: string, worktreePath: string): Promise<WorktreeRemovalResult> {
   const resolvedRepoRoot = await fs.realpath(repoRoot).catch(() => path.resolve(repoRoot));
   const resolvedWorktreePath = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
   const result = await runCommand(
@@ -245,7 +278,7 @@ export async function removeWorktree(repoRoot, worktreePath) {
   };
 }
 
-export async function pruneWorktrees(repoRoot) {
+export async function pruneWorktrees(repoRoot: string): Promise<PruneResult> {
   const resolvedRepoRoot = await fs.realpath(repoRoot).catch(() => path.resolve(repoRoot));
   const result = await runCommand(
     "git",
@@ -259,7 +292,7 @@ export async function pruneWorktrees(repoRoot) {
   };
 }
 
-export async function listDirectories(targetPath) {
+export async function listDirectories(targetPath?: string): Promise<DirectoryListing> {
   const initialPath = targetPath ? path.resolve(targetPath) : os.homedir();
   const resolvedPath = await fs.realpath(initialPath).catch(() => path.resolve(initialPath));
   const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
