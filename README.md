@@ -16,12 +16,29 @@ A lightweight web UI for running multiple Codex SDK runs in parallel, each isola
 
 **Requirements:** [Bun](https://bun.sh/) 1.0+ and Git (used to create isolated worktrees for each run).
 
+### Production
+
 ```bash
-bun install
-bun run start
+bun install              # also installs frontend deps via postinstall
+bun run build:frontend   # builds frontend → public/
+bun run start            # serves on http://localhost:3000
 ```
 
 Open [http://localhost:3000](http://localhost:3000) to launch the UI.
+
+### Development
+
+Run the backend and frontend dev servers in two terminals:
+
+```bash
+# Terminal 1 — backend (API + SSE), auto-reloads on changes
+bun run dev:backend
+
+# Terminal 2 — frontend (Vite HMR)
+bun run dev:frontend
+```
+
+Open [http://localhost:5173](http://localhost:5173) for the Vite dev server (proxies `/api` and `/events` to the backend on port 3000).
 
 ## Credentials
 
@@ -29,16 +46,6 @@ Agents Runner uses the Codex SDK, which needs credentials to talk to a model pro
 
 1. **API key** &mdash; if `OPENAI_API_KEY` (or `CODEX_API_KEY`) is set in the environment, the SDK uses it directly.
 2. **Existing login** &mdash; if no API key is set, the SDK looks for credentials already stored on your machine (typically `~/.codex/auth.json`). If you have logged in through the Codex CLI or an IDE extension, the credentials are picked up automatically &mdash; no extra setup needed.
-
-## Batch Modes
-
-### Repeated
-
-Give a single prompt and run it across N runs in parallel. Each run works in its own worktree from the same starting point. Useful for benchmarking, comparing approaches, or running the same task with different behavior.
-
-### Generated
-
-Provide a high-level prompt and let Codex split it into N distinct tasks automatically. Each generated task is then executed by its own run in a separate worktree. Useful for parallelizing large refactors or multi-file work across independent runs.
 
 ## How It Works
 
@@ -49,16 +56,16 @@ Provide a high-level prompt and let Codex split it into N distinct tasks automat
 
 ## Configuration
 
-| Setting | Description |
-|---|---|
-| **Project Folder** | Path to your git repo or a subdirectory inside one. |
-| **Worktree Root** | Where worktrees are created. Defaults to the project's parent directory. |
-| **Run Count** | Number of runs to launch (1 &ndash; 50). |
-| **Concurrency** | Max runs executing at the same time. |
-| **Base Ref** | Git ref to branch worktrees from. Defaults to HEAD. |
-| **Model** | Override the default Codex model. |
-| **Sandbox** | `workspace-write` (default), `read-only`, or `danger-full-access`. |
-| **Approval Policy** | `never` (default), `on-request`, `on-failure`, or `untrusted`. |
+| Setting             | Description                                                              |
+| ------------------- | ------------------------------------------------------------------------ |
+| **Project Folder**  | Path to your git repo or a subdirectory inside one.                      |
+| **Worktree Root**   | Where worktrees are created. Defaults to the project's parent directory. |
+| **Run Count**       | Number of runs to launch (1 &ndash; 50).                                 |
+| **Concurrency**     | Max runs executing at the same time.                                     |
+| **Base Ref**        | Git ref to branch worktrees from. Defaults to HEAD.                      |
+| **Model**           | Override the default Codex model.                                        |
+| **Sandbox**         | `workspace-write` (default), `read-only`, or `danger-full-access`.       |
+| **Approval Policy** | `never` (default), `on-request`, `on-failure`, or `untrusted`.           |
 
 ## Data Storage
 

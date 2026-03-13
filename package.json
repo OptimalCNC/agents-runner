@@ -5,8 +5,12 @@
   "type": "module",
   "description": "Web UI for running multiple Codex SDK batches concurrently across git worktrees.",
   "scripts": {
+    "postinstall": "cd frontend && bun install",
     "start": "bun src/server.ts",
-    "dev": "bun --watch src/server.ts",
+    "dev:backend": "bun --watch src/server.ts",
+    "dev:frontend": "cd frontend && bun run dev",
+    "dev": "bun run dev:backend",
+    "build:frontend": "cd frontend && bun run build",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },
