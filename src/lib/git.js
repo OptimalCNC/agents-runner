@@ -172,6 +172,93 @@ export async function collectWorktreeReview(worktreePath) {
   };
 }
 
+function parseStatusLineCounts(statusOutput) {
+  const lines = String(statusOutput ?? "")
+    .split("\n")
+    .map((value) => value.trimEnd())
+    .filter(Boolean);
+
+  let trackedChangeCount = 0;
+  let untrackedChangeCount = 0;
+
+  for (const line of lines) {
+    if (line.startsWith("?? ")) {
+      untrackedChangeCount += 1;
+      continue;
+    }
+
+    trackedChangeCount += 1;
+  }
+
+  return {
+    statusEntries: lines,
+    trackedChangeCount,
+    untrackedChangeCount,
+    changeCount: trackedChangeCount + untrackedChangeCount,
+  };
+}
+
+export async function inspectWorktreeChanges(worktreePath) {
+  const resolvedPath = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+  const exists = await fs.access(resolvedPath).then(() => true).catch(() => false);
+  const status = await runCommand(
+    "git",
+    ["-C", resolvedPath, "status", "--porcelain=v1", "--untracked-files=all"],
+    { allowFailure: true },
+  );
+
+  const counts = parseStatusLineCounts(status.stdout);
+  const errorText = (status.stderr || status.stdout || "").trim();
+
+  return {
+    worktreePath: resolvedPath,
+    exists,
+    isDirty: counts.changeCount > 0,
+    changeCount: counts.changeCount,
+    trackedChangeCount: counts.trackedChangeCount,
+    untrackedChangeCount: counts.untrackedChangeCount,
+    statusEntries: counts.statusEntries,
+    error: status.code === 0 ? "" : errorText || "Unable to inspect worktree.",
+  };
+}
+
+export async function removeWorktree(repoRoot, worktreePath) {
+  const resolvedRepoRoot = await fs.realpath(repoRoot).catch(() => path.resolve(repoRoot));
+  const resolvedWorktreePath = await fs.realpath(worktreePath).catch(() => path.resolve(worktreePath));
+  const result = await runCommand(
+    "git",
+    ["-C", resolvedRepoRoot, "worktree", "remove", "--force", resolvedWorktreePath],
+    { allowFailure: true },
+  );
+  const errorText =
+    (result.stderr || result.stdout || "").trim() || "Failed to remove worktree.";
+  const missingOnDisk = await fs.access(resolvedWorktreePath).then(() => false).catch(() => true);
+  const alreadyMissing =
+    missingOnDisk &&
+    /does not exist|not a working tree|no such file|cannot find/i.test(errorText);
+
+  return {
+    worktreePath: resolvedWorktreePath,
+    removed: result.code === 0 || alreadyMissing,
+    alreadyMissing,
+    error: result.code === 0 || alreadyMissing ? "" : errorText,
+  };
+}
+
+export async function pruneWorktrees(repoRoot) {
+  const resolvedRepoRoot = await fs.realpath(repoRoot).catch(() => path.resolve(repoRoot));
+  const result = await runCommand(
+    "git",
+    ["-C", resolvedRepoRoot, "worktree", "prune", "--expire", "now"],
+    { allowFailure: true },
+  );
+
+  return {
+    ok: result.code === 0,
+    error: result.code === 0 ? "" : (result.stderr || result.stdout || "").trim() || "Failed to prune worktrees.",
+  };
+}
+
 export async function listDirectories(targetPath) {
   const initialPath = targetPath ? path.resolve(targetPath) : os.homedir();
   const resolvedPath = await fs.realpath(initialPath).catch(() => path.resolve(initialPath));

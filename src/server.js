@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createCodexModelCatalog } from "./lib/codexModels.js";
 import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git.js";
 import { createBatchStore } from "./lib/batchStore.js";
-import { cancelBatch, deleteBatch, generateBatchTitle, executeBatch } from "./lib/runner.js";
+import { cancelBatch, deleteBatch, generateBatchTitle, executeBatch, previewBatchDelete } from "./lib/runner.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -163,6 +163,12 @@ function normalizeCreateBatchPayload(body) {
   };
 }
 
+function normalizeDeleteBatchPayload(body) {
+  return {
+    removeWorktrees: Boolean(body.removeWorktrees),
+  };
+}
+
 async function serveStaticFile(response, pathname) {
   const relativePath = pathname === "/" ? "/index.html" : pathname;
   const targetPath = path.normalize(path.join(publicDirectory, relativePath));
@@ -294,6 +300,19 @@ async function handleApi(request, response, url) {
   }
 
   const batchIdMatch = url.pathname.match(/^\/api\/batches\/([^/]+)$/);
+  const deletePreviewMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/delete-preview$/);
+
+  if (request.method === "GET" && deletePreviewMatch) {
+    const preview = await previewBatchDelete(store, decodeURIComponent(deletePreviewMatch[1]));
+    if (!preview) {
+      sendError(response, 404, "Batch not found.");
+      return;
+    }
+
+    sendJson(response, 200, { preview });
+    return;
+  }
+
   if (request.method === "GET" && batchIdMatch) {
     const batch = store.getBatch(decodeURIComponent(batchIdMatch[1]));
     if (!batch) {
@@ -305,12 +324,28 @@ async function handleApi(request, response, url) {
   }
 
   if (request.method === "DELETE" && batchIdMatch) {
-    const batch = deleteBatch(store, decodeURIComponent(batchIdMatch[1]));
-    if (!batch) {
-      sendError(response, 404, "Batch not found.");
-      return;
+    const body = await readBody(request);
+    const payload = normalizeDeleteBatchPayload(body);
+
+    try {
+      const result = await deleteBatch(store, decodeURIComponent(batchIdMatch[1]), payload);
+      if (!result) {
+        sendError(response, 404, "Batch not found.");
+        return;
+      }
+
+      sendJson(response, 200, result);
+    } catch (error) {
+      if (error?.statusCode === 409) {
+        sendJson(response, 409, {
+          error: error.message || "Failed to remove worktrees.",
+          details: error.details || null,
+        });
+        return;
+      }
+
+      throw error;
     }
-    sendJson(response, 200, { batch });
     return;
   }
 

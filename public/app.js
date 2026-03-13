@@ -15,6 +15,15 @@ const state = {
   autoWorktreeRoot: null,
   drawerOpen: false,
   inspectDebounceTimer: null,
+  deleteDialog: {
+    batchId: null,
+    removeWorktrees: false,
+    preview: null,
+    loading: false,
+    error: "",
+    submitting: false,
+    requestId: 0,
+  },
   modelCatalog: {
     loading: false,
     loaded: false,
@@ -79,6 +88,15 @@ const el = {
   browserSelectButton: $("#browserSelectButton"),
   browseProjectButton: $("#browseProjectButton"),
   browseWorktreeButton: $("#browseWorktreeButton"),
+  deleteBatchDialog: $("#deleteBatchDialog"),
+  deleteBatchTitle: $("#deleteBatchTitle"),
+  deleteBatchMessage: $("#deleteBatchMessage"),
+  deleteBatchRemoveWorktrees: $("#deleteBatchRemoveWorktrees"),
+  deleteBatchHint: $("#deleteBatchHint"),
+  deleteBatchPreview: $("#deleteBatchPreview"),
+  closeDeleteBatchButton: $("#closeDeleteBatchButton"),
+  deleteBatchCancelButton: $("#deleteBatchCancelButton"),
+  deleteBatchConfirmButton: $("#deleteBatchConfirmButton"),
   toastContainer: $("#toastContainer"),
   segments: Array.from(document.querySelectorAll(".seg-btn")),
 };
@@ -262,7 +280,12 @@ async function fetchJson(url, options = {}) {
     ...options,
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || `Request failed with ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(payload.error || `Request failed with ${response.status}`);
+    error.status = response.status;
+    error.details = payload.details;
+    throw error;
+  }
   return payload;
 }
 
@@ -685,6 +708,253 @@ function showToast(type, title, message) {
   });
 }
 
+function getBatchSummaryById(batchId) {
+  return state.batches.find((entry) => entry.id === batchId) || state.batchDetails.get(batchId) || null;
+}
+
+function resetDeleteDialogState() {
+  state.deleteDialog.batchId = null;
+  state.deleteDialog.removeWorktrees = false;
+  state.deleteDialog.preview = null;
+  state.deleteDialog.loading = false;
+  state.deleteDialog.error = "";
+  state.deleteDialog.submitting = false;
+  state.deleteDialog.requestId += 1;
+}
+
+function closeDeleteBatchDialog() {
+  if (el.deleteBatchDialog.open) {
+    el.deleteBatchDialog.close();
+    return;
+  }
+
+  resetDeleteDialogState();
+  renderDeleteBatchDialog();
+}
+
+function formatDeleteWorktreeCount(count) {
+  return `${count} worktree${count === 1 ? "" : "s"}`;
+}
+
+function formatChangeCountLabel(entry) {
+  const totalLabel = `${entry.changeCount} change${entry.changeCount === 1 ? "" : "s"}`;
+  const breakdown = [];
+
+  if (entry.trackedChangeCount > 0) {
+    breakdown.push(`${entry.trackedChangeCount} tracked`);
+  }
+
+  if (entry.untrackedChangeCount > 0) {
+    breakdown.push(`${entry.untrackedChangeCount} untracked`);
+  }
+
+  return breakdown.length > 0 ? `${totalLabel} · ${breakdown.join(" · ")}` : totalLabel;
+}
+
+function formatDeletePreviewPath(entry) {
+  return entry.worktreePath || "Worktree path unavailable";
+}
+
+function renderDeletePreviewItems(entries, formatter) {
+  return `
+    <div class="delete-dialog-preview-list">
+      ${entries.map((entry) => {
+        const rendered = formatter(entry);
+        const meta = typeof rendered === "string" ? rendered : rendered?.meta || "";
+        const detail = typeof rendered === "string" ? escapeHtml(formatDeletePreviewPath(entry)) : rendered?.detail;
+
+        return `
+          <div class="delete-dialog-preview-item">
+            <div class="delete-dialog-preview-item-header">
+              <div class="delete-dialog-preview-run">${escapeHtml(entry.runTitle || `Run ${Number(entry.runIndex || 0) + 1}`)}</div>
+              <div class="delete-dialog-preview-meta">${meta}</div>
+            </div>
+            ${detail ? `<div class="delete-dialog-preview-path">${detail}</div>` : ""}
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderDeleteBatchDialog() {
+  const batch = getBatchSummaryById(state.deleteDialog.batchId);
+  const isActive = batch?.status === "running" || batch?.status === "queued";
+  const removeWorktrees = state.deleteDialog.removeWorktrees;
+  const preview = state.deleteDialog.preview;
+  const isLoading = state.deleteDialog.loading;
+  const hasRequestError = Boolean(state.deleteDialog.error);
+  const canConfirm =
+    Boolean(batch) &&
+    !state.deleteDialog.submitting &&
+    (!removeWorktrees || (!isLoading && !hasRequestError));
+
+  el.deleteBatchTitle.textContent = batch ? `Delete ${batch.title}` : "Delete Batch";
+  el.deleteBatchMessage.textContent = batch
+    ? isActive
+      ? `Remove "${batch.title}"? Active runs will be cancelled.`
+      : `Remove "${batch.title}"?`
+    : "Remove this batch?";
+
+  el.deleteBatchRemoveWorktrees.checked = removeWorktrees;
+  el.deleteBatchRemoveWorktrees.disabled = state.deleteDialog.submitting;
+  el.deleteBatchRemoveWorktrees.closest(".delete-dialog-option")?.classList.toggle(
+    "is-disabled",
+    state.deleteDialog.submitting,
+  );
+
+  el.deleteBatchHint.className = "delete-dialog-hint";
+  el.deleteBatchPreview.className = "delete-dialog-preview";
+  el.deleteBatchPreview.hidden = true;
+  el.deleteBatchPreview.innerHTML = "";
+
+  if (!removeWorktrees) {
+    el.deleteBatchHint.textContent = "Associated worktrees will stay on disk.";
+  } else if (isLoading) {
+    el.deleteBatchHint.textContent = "Checking worktrees for uncommitted changes…";
+  } else if (hasRequestError) {
+    el.deleteBatchHint.textContent = state.deleteDialog.error;
+    el.deleteBatchHint.classList.add("is-error");
+  } else if (!preview) {
+    el.deleteBatchHint.textContent = "Check the associated worktrees before deleting them.";
+  } else {
+    const dirtyEntries = preview.worktrees.filter((entry) => entry.isDirty);
+    const inspectFailures = preview.worktrees.filter((entry) => entry.error && !entry.isDirty);
+
+    if (preview.worktreeCount === 0) {
+      el.deleteBatchHint.textContent = "This batch does not have any associated worktrees yet.";
+    } else if (dirtyEntries.length > 0) {
+      el.deleteBatchHint.textContent = `${dirtyEntries.length} ${dirtyEntries.length === 1 ? "run has" : "runs have"} uncommitted changes. Removing worktrees will discard them.`;
+      el.deleteBatchHint.classList.add("is-warning");
+      el.deleteBatchPreview.hidden = false;
+      el.deleteBatchPreview.classList.add("is-warning");
+      el.deleteBatchPreview.innerHTML = `
+        <div class="delete-dialog-preview-title">${icons.alert} Uncommitted Changes Detected</div>
+        <div class="delete-dialog-preview-summary">Checked ${formatDeleteWorktreeCount(preview.worktreeCount)}. The runs below still have local changes.</div>
+        ${renderDeletePreviewItems(dirtyEntries, (entry) => escapeHtml(formatChangeCountLabel(entry)))}
+      `;
+    } else {
+      el.deleteBatchHint.textContent = `Checked ${formatDeleteWorktreeCount(preview.worktreeCount)}. No uncommitted changes detected.`;
+      el.deleteBatchPreview.hidden = false;
+      el.deleteBatchPreview.innerHTML = `
+        <div class="delete-dialog-preview-title">${icons.folder} Checked Worktrees</div>
+        <div class="delete-dialog-preview-summary">These worktrees will be removed with the batch.</div>
+        ${renderDeletePreviewItems(preview.worktrees, (entry) => ({
+          meta: escapeHtml(entry.exists ? "Clean" : "Missing"),
+          detail: escapeHtml(formatDeletePreviewPath(entry)),
+        }))}
+      `;
+      if (inspectFailures.length > 0) {
+        el.deleteBatchHint.classList.add("is-warning");
+        el.deleteBatchPreview.classList.add("is-error");
+        el.deleteBatchPreview.innerHTML = `
+          <div class="delete-dialog-preview-title">${icons.alert} Inspection Warnings</div>
+          <div class="delete-dialog-preview-summary">Some worktrees could not be inspected cleanly. Removal will still be attempted.</div>
+          ${renderDeletePreviewItems(inspectFailures, (entry) => ({
+            meta: escapeHtml(entry.error || "Inspection failed."),
+            detail: escapeHtml(formatDeletePreviewPath(entry)),
+          }))}
+        `;
+      }
+    }
+  }
+
+  el.deleteBatchConfirmButton.disabled = !canConfirm;
+  if (state.deleteDialog.submitting) {
+    el.deleteBatchConfirmButton.textContent = "Deleting…";
+  } else if (removeWorktrees && preview?.worktreeCount > 0) {
+    el.deleteBatchConfirmButton.textContent = `Delete Batch + ${formatDeleteWorktreeCount(preview.worktreeCount)}`;
+  } else {
+    el.deleteBatchConfirmButton.textContent = "Delete Batch";
+  }
+}
+
+async function loadDeleteBatchPreview() {
+  const batchId = state.deleteDialog.batchId;
+  if (!batchId || !state.deleteDialog.removeWorktrees) {
+    return;
+  }
+
+  const requestId = state.deleteDialog.requestId + 1;
+  state.deleteDialog.requestId = requestId;
+  state.deleteDialog.loading = true;
+  state.deleteDialog.error = "";
+  state.deleteDialog.preview = null;
+  renderDeleteBatchDialog();
+
+  try {
+    const payload = await fetchJson(`/api/batches/${encodeURIComponent(batchId)}/delete-preview`);
+    if (state.deleteDialog.requestId !== requestId || state.deleteDialog.batchId !== batchId) {
+      return;
+    }
+
+    state.deleteDialog.preview = payload.preview;
+  } catch (error) {
+    if (state.deleteDialog.requestId !== requestId || state.deleteDialog.batchId !== batchId) {
+      return;
+    }
+
+    state.deleteDialog.error = error.message;
+  } finally {
+    if (state.deleteDialog.requestId === requestId && state.deleteDialog.batchId === batchId) {
+      state.deleteDialog.loading = false;
+      renderDeleteBatchDialog();
+    }
+  }
+}
+
+async function openDeleteBatchDialog(batchId) {
+  const batch = getBatchSummaryById(batchId);
+  if (!batch) {
+    return;
+  }
+
+  resetDeleteDialogState();
+  state.deleteDialog.batchId = batchId;
+  renderDeleteBatchDialog();
+  if (!el.deleteBatchDialog.open) {
+    el.deleteBatchDialog.showModal();
+  }
+}
+
+async function confirmDeleteBatch() {
+  const batchId = state.deleteDialog.batchId;
+  const batch = getBatchSummaryById(batchId);
+  const removeWorktrees = state.deleteDialog.removeWorktrees;
+  if (!batch || state.deleteDialog.submitting) {
+    return;
+  }
+
+  state.deleteDialog.submitting = true;
+  renderDeleteBatchDialog();
+
+  try {
+    const payload = await fetchJson(`/api/batches/${encodeURIComponent(batchId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ removeWorktrees }),
+    });
+
+    closeDeleteBatchDialog();
+    await removeBatchFromState(batchId);
+
+    const cleanupMessage = removeWorktrees
+      ? payload.cleanup?.removedCount > 0
+        ? `${payload.cleanup.removedCount} ${payload.cleanup.removedCount === 1 ? "worktree" : "worktrees"} removed.`
+        : "No associated worktrees to remove."
+      : batch.title;
+
+    showToast("success", "Batch removed", cleanupMessage);
+  } catch (error) {
+    if (error.details?.deletePreview) {
+      state.deleteDialog.preview = error.details.deletePreview;
+    }
+    state.deleteDialog.error = error.message;
+    showToast("error", "Remove failed", error.message);
+    state.deleteDialog.submitting = false;
+    renderDeleteBatchDialog();
+  }
+}
+
 /* ─── Drawer ─── */
 function openDrawer() {
   state.drawerOpen = true;
@@ -781,6 +1051,10 @@ async function syncSelectedBatch() {
 }
 
 async function removeBatchFromState(batchId) {
+  if (state.deleteDialog.batchId === batchId) {
+    closeDeleteBatchDialog();
+  }
+
   state.batches = state.batches.filter((batch) => batch.id !== batchId);
   state.batchDetails.delete(batchId);
 
@@ -1423,28 +1697,7 @@ async function cancelSelectedBatch() {
 }
 
 async function deleteBatchById(batchId) {
-  const batch = state.batches.find((entry) => entry.id === batchId);
-  if (!batch) {
-    return;
-  }
-
-  const confirmed = window.confirm(
-    batch.status === "running" || batch.status === "queued"
-      ? `Remove "${batch.title}"? Active runs will be cancelled.`
-      : `Remove "${batch.title}"?`,
-  );
-
-  if (!confirmed) {
-    return;
-  }
-
-  try {
-    await fetchJson(`/api/batches/${encodeURIComponent(batchId)}`, { method: "DELETE" });
-    await removeBatchFromState(batchId);
-    showToast("success", "Batch removed", batch.title);
-  } catch (error) {
-    showToast("error", "Remove failed", error.message);
-  }
+  await openDeleteBatchDialog(batchId);
 }
 
 async function refreshRunReview() {
@@ -1561,6 +1814,25 @@ function bindEvents() {
   el.inspectProjectButton.addEventListener("click", inspectProject);
   el.browseProjectButton.addEventListener("click", () => openBrowser(el.projectPath, "Choose Project Folder"));
   el.browseWorktreeButton.addEventListener("click", () => openBrowser(el.worktreeRoot, "Choose Worktree Root"));
+  el.closeDeleteBatchButton.addEventListener("click", closeDeleteBatchDialog);
+  el.deleteBatchCancelButton.addEventListener("click", closeDeleteBatchDialog);
+  el.deleteBatchConfirmButton.addEventListener("click", confirmDeleteBatch);
+  el.deleteBatchRemoveWorktrees.addEventListener("change", async () => {
+    state.deleteDialog.requestId += 1;
+    state.deleteDialog.removeWorktrees = el.deleteBatchRemoveWorktrees.checked;
+    state.deleteDialog.preview = null;
+    state.deleteDialog.error = "";
+    state.deleteDialog.loading = false;
+    renderDeleteBatchDialog();
+
+    if (state.deleteDialog.removeWorktrees) {
+      await loadDeleteBatchPreview();
+    }
+  });
+  el.deleteBatchDialog.addEventListener("close", () => {
+    resetDeleteDialogState();
+    renderDeleteBatchDialog();
+  });
 
   el.batchesList.addEventListener("click", async (event) => {
     const deleteButton = event.target.closest('[data-action="delete-batch"]');

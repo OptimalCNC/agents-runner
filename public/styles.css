@@ -1711,6 +1711,16 @@ select {
   background: var(--bg-raised);
 }
 
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
 .browser-path {
   flex: 1;
   font-family: var(--font-mono);
@@ -1753,6 +1763,140 @@ select {
   background-image: url("data:image/svg+xml,%3Csvg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
   background-size: contain;
   flex-shrink: 0;
+}
+
+.delete-dialog-shell {
+  width: min(640px, calc(100vw - 40px));
+}
+
+.delete-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.delete-dialog-copy {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.delete-dialog-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.delete-dialog-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.delete-dialog-option input:disabled {
+  cursor: not-allowed;
+}
+
+.delete-dialog-option.is-disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.delete-dialog-hint {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.delete-dialog-hint.is-warning {
+  color: var(--warning);
+}
+
+.delete-dialog-hint.is-error {
+  color: var(--danger);
+}
+
+.delete-dialog-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+}
+
+.delete-dialog-preview.is-warning {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(24, 24, 27, 0.95));
+}
+
+.delete-dialog-preview.is-error {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.delete-dialog-preview-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.delete-dialog-preview-title svg {
+  color: var(--warning);
+}
+
+.delete-dialog-preview-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.delete-dialog-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.delete-dialog-preview-item {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.delete-dialog-preview-item-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delete-dialog-preview-run {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.delete-dialog-preview-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+.delete-dialog-preview-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  word-break: break-all;
 }
 
 /* ───────────────────── Toast ───────────────────── */

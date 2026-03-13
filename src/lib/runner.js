@@ -2,15 +2,29 @@ import path from "node:path";
 
 import { Codex } from "@openai/codex-sdk";
 
-import { collectWorktreeReview, createWorktree, inspectProject } from "./git.js";
+import {
+  collectWorktreeReview,
+  createWorktree,
+  inspectProject,
+  inspectWorktreeChanges,
+  pruneWorktrees,
+  removeWorktree,
+} from "./git.js";
 import { isAbortError } from "./process.js";
 
 const MAX_LOG_ENTRIES = 160;
 const MAX_TEXT_LENGTH = 24_000;
+const WORKTREE_REMOVE_RETRY_DELAY_MS = 500;
+const WORKTREE_REMOVE_RETRY_ATTEMPTS = 6;
+const BATCH_SETTLE_TIMEOUT_MS = 5_000;
 const executionRegistry = new Map();
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function truncateText(value, limit = MAX_TEXT_LENGTH) {
@@ -119,6 +133,121 @@ function maybeClearExecutionState(batchId, execution) {
   if (executionRegistry.get(batchId) === execution) {
     clearExecutionState(batchId);
   }
+}
+
+function abortBatchExecution(batchId) {
+  const execution = executionRegistry.get(batchId);
+  execution?.titleController?.abort();
+  execution?.generationController?.abort();
+  for (const controller of execution?.runControllers.values() ?? []) {
+    controller.abort();
+  }
+}
+
+function getBatchWorktreeRuns(batch) {
+  return batch.runs.filter((run) => Boolean(run.worktreePath));
+}
+
+async function buildBatchWorktreePreview(batch) {
+  const worktreeRuns = getBatchWorktreeRuns(batch);
+  const worktrees = await Promise.all(
+    worktreeRuns.map(async (run) => {
+      const summary = await inspectWorktreeChanges(run.worktreePath);
+      return {
+        runId: run.id,
+        runIndex: run.index,
+        runTitle: run.title,
+        worktreePath: summary.worktreePath,
+        isDirty: summary.isDirty,
+        changeCount: summary.changeCount,
+        trackedChangeCount: summary.trackedChangeCount,
+        untrackedChangeCount: summary.untrackedChangeCount,
+        exists: summary.exists,
+        error: summary.error,
+      };
+    }),
+  );
+
+  const dirtyWorktrees = worktrees.filter((entry) => entry.isDirty);
+  const inspectFailures = worktrees.filter((entry) => entry.error);
+
+  return {
+    batchId: batch.id,
+    worktreeCount: worktrees.length,
+    dirtyWorktreeCount: dirtyWorktrees.length,
+    inspectFailureCount: inspectFailures.length,
+    worktrees,
+  };
+}
+
+async function resolveBatchRepoRoot(batch) {
+  if (batch.projectContext?.repoRoot) {
+    return batch.projectContext.repoRoot;
+  }
+
+  const projectContext = await inspectProject(batch.config.projectPath);
+  return projectContext.repoRoot;
+}
+
+function buildCleanupFailureMessage(failedEntries) {
+  if (failedEntries.length === 0) {
+    return "";
+  }
+
+  const details = failedEntries
+    .map((entry) => `${entry.runTitle}: ${entry.error}`)
+    .join(" | ");
+
+  return failedEntries.length === 1
+    ? `Failed to remove 1 worktree. ${details}`
+    : `Failed to remove ${failedEntries.length} worktrees. ${details}`;
+}
+
+class BatchDeleteCleanupError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "BatchDeleteCleanupError";
+    this.statusCode = 409;
+    this.details = details;
+  }
+}
+
+function hasActiveRuns(batch) {
+  return batch?.runs.some((run) => run.status === "running" || run.status === "queued");
+}
+
+async function waitForBatchToSettle(store, batchId, timeoutMs = BATCH_SETTLE_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const snapshot = store.getBatch(batchId);
+    if (!hasActiveRuns(snapshot)) {
+      return;
+    }
+
+    await sleep(200);
+  }
+}
+
+function isRetryableWorktreeRemovalError(message) {
+  return /permission denied|resource busy|in use|being used|device or resource busy|access is denied/i.test(
+    String(message ?? ""),
+  );
+}
+
+async function removeWorktreeWithRetries(repoRoot, entry) {
+  let result = null;
+
+  for (let attempt = 0; attempt < WORKTREE_REMOVE_RETRY_ATTEMPTS; attempt += 1) {
+    result = await removeWorktree(repoRoot, entry.worktreePath);
+    if (result.removed || !isRetryableWorktreeRemovalError(result.error)) {
+      return result;
+    }
+
+    await sleep(WORKTREE_REMOVE_RETRY_DELAY_MS);
+  }
+
+  return result;
 }
 
 function buildRunRecord(task, index) {
@@ -633,32 +762,89 @@ export function cancelBatch(store, batchId) {
     batch.completedAt = nowIso();
   }
 
-  const execution = executionRegistry.get(batchId);
-  execution?.titleController?.abort();
-  execution?.generationController?.abort();
-  for (const controller of execution?.runControllers.values() ?? []) {
-    controller.abort();
-  }
+  abortBatchExecution(batchId);
 
   store.updateBatch(batchId, () => {});
   return store.getBatch(batchId);
 }
 
-export function deleteBatch(store, batchId) {
+export async function previewBatchDelete(store, batchId) {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
+  }
+
+  return buildBatchWorktreePreview(batch);
+}
+
+export async function deleteBatch(store, batchId, options = {}) {
   const batch = store.getMutableBatch(batchId);
   if (!batch) {
     return null;
   }
 
+  const removeWorktreesRequested = Boolean(options.removeWorktrees);
   batch.cancelRequested = true;
+  abortBatchExecution(batchId);
+  store.updateBatch(batchId, () => {});
 
-  const execution = executionRegistry.get(batchId);
-  execution?.titleController?.abort();
-  execution?.generationController?.abort();
-  for (const controller of execution?.runControllers.values() ?? []) {
-    controller.abort();
+  let deletePreview = null;
+  let cleanup = null;
+  if (removeWorktreesRequested) {
+    await waitForBatchToSettle(store, batchId);
+    deletePreview = await buildBatchWorktreePreview(batch);
+
+    if (deletePreview.worktreeCount > 0) {
+      let repoRoot;
+      try {
+        repoRoot = await resolveBatchRepoRoot(batch);
+      } catch (error) {
+        throw new BatchDeleteCleanupError(`Failed to resolve the repository root for worktree cleanup. ${error.message}`, {
+          deletePreview,
+          cleanup: null,
+        });
+      }
+      const removals = await Promise.all(
+        deletePreview.worktrees.map(async (entry) => {
+          const result = await removeWorktreeWithRetries(repoRoot, entry);
+          return {
+            ...entry,
+            removed: result.removed,
+            error: result.error,
+          };
+        }),
+      );
+
+      const pruneResult = await pruneWorktrees(repoRoot);
+      const failedRemovals = removals.filter((entry) => !entry.removed);
+      cleanup = {
+        removedCount: removals.filter((entry) => entry.removed).length,
+        failedCount: failedRemovals.length,
+        worktrees: removals,
+        pruneError: pruneResult.ok ? "" : pruneResult.error,
+      };
+
+      if (failedRemovals.length > 0 || cleanup.pruneError) {
+        throw new BatchDeleteCleanupError(buildCleanupFailureMessage(failedRemovals) || cleanup.pruneError, {
+          deletePreview,
+          cleanup,
+        });
+      }
+    } else {
+      cleanup = {
+        removedCount: 0,
+        failedCount: 0,
+        worktrees: [],
+        pruneError: "",
+      };
+    }
   }
 
   clearExecutionState(batchId);
-  return store.deleteBatch(batchId);
+  const deletedBatch = await store.deleteBatch(batchId);
+  return {
+    batch: deletedBatch,
+    deletePreview,
+    cleanup,
+  };
 }

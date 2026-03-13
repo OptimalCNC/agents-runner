@@ -57,6 +57,7 @@ export function createBatchStore(dataDirectory) {
   const dirtyRuns = new Map();
   let persistTimer = null;
   let broadcastTimer = null;
+  let storageQueue = Promise.resolve();
 
   function batchDir(batchId) {
     return path.join(batchesRoot, batchId);
@@ -98,22 +99,31 @@ export function createBatchStore(dataDirectory) {
     }
   }
 
+  function queueStorageTask(task) {
+    const run = storageQueue.then(task, task);
+    storageQueue = run.catch(() => {});
+    return run;
+  }
+
   function schedulePersist() {
     if (persistTimer) {
       return;
     }
 
-    persistTimer = setTimeout(async () => {
+    persistTimer = setTimeout(() => {
       persistTimer = null;
-      try {
-        const ids = Array.from(dirtyBatches);
-        dirtyBatches.clear();
-        for (const batchId of ids) {
-          await persistBatch(batchId);
+      const ids = Array.from(dirtyBatches);
+      dirtyBatches.clear();
+
+      void queueStorageTask(async () => {
+        try {
+          for (const batchId of ids) {
+            await persistBatch(batchId);
+          }
+        } catch (error) {
+          console.error("Failed to persist batches", error);
         }
-      } catch (error) {
-        console.error("Failed to persist batches", error);
-      }
+      });
     }, 150);
   }
 
@@ -411,11 +421,13 @@ export function createBatchStore(dataDirectory) {
     schedulePersist();
     broadcastEvent("batch.deleted", { batchId });
 
-    try {
-      await fs.rm(batchDir(batchId), { recursive: true, force: true });
-    } catch (error) {
-      console.error(`Failed to remove batch directory for ${batchId}`, error);
-    }
+    await queueStorageTask(async () => {
+      try {
+        await fs.rm(batchDir(batchId), { recursive: true, force: true });
+      } catch (error) {
+        console.error(`Failed to remove batch directory for ${batchId}`, error);
+      }
+    });
 
     return clone(batch);
   }
