@@ -38,7 +38,7 @@ frontend/
     │   ├── store.ts      # All signals + computed values + state helpers
     │   ├── api.ts        # Typed fetch wrappers for every backend endpoint
     │   ├── sse.ts        # EventSource with 5s auto-reconnect; writes to signals
-    │   ├── codexAuth.ts  # Codex auth validation signal + refresh logic
+    │   ├── codexAuth.ts  # Codex auth status signal + refresh logic
     │   └── modelCatalog.ts # Model catalog loading (lazy, triggered after auth)
     ├── utils/
     │   ├── format.ts     # Date, status, mode, reasoning-effort formatting
@@ -207,7 +207,7 @@ apiGetRunReview(batchId, runId)         // GET /api/batches/:batchId/runs/:runId
 apiInspectProject(path)                 // POST /api/project/inspect
 apiBrowseFs(path)                       // GET /api/fs?path=...
 apiLoadModels(refresh?)                 // GET /api/models[?refresh=true]
-apiValidateCodexAuth()                  // GET /api/auth/validate
+apiLoadCodexAuthStatus()                // GET /api/auth/status
 ```
 
 ---

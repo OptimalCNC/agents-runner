@@ -1,6 +1,7 @@
 import type { Run } from "../../types.js";
 import { StatusPill } from "../StatusPill.js";
 import { formatDate } from "../../utils/format.js";
+import { getRunStatusDescription } from "../../utils/runStatus.js";
 
 interface Props {
   run: Run;
@@ -8,6 +9,7 @@ interface Props {
 
 export function OverviewTab({ run }: Props) {
   const directory = run.workingDirectory || run.worktreePath || "Pending";
+  const statusDescription = getRunStatusDescription(run.status);
 
   return (
     <div className="tab-panel is-active" data-tab="overview">
@@ -16,6 +18,12 @@ export function OverviewTab({ run }: Props) {
           <span className="meta-row-label">Status</span>
           <StatusPill status={run.status} />
         </div>
+        {statusDescription && (
+          <div className="meta-row">
+            <span className="meta-row-label">State Detail</span>
+            <span className="meta-row-value">{statusDescription}</span>
+          </div>
+        )}
         <div className="meta-row">
           <span className="meta-row-label">Directory</span>
           <span className="meta-row-value mono">{directory}</span>

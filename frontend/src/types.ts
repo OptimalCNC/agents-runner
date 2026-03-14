@@ -1,7 +1,14 @@
 // Frontend-safe type definitions (mirrors src/types.ts without Node.js imports)
 
 export type BatchStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type RunStatus =
+  | "queued"
+  | "preparing"
+  | "waiting_for_codex"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
 export type GenerationStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export interface BatchConfig {
@@ -207,6 +214,8 @@ export interface BatchSummary {
   completedRuns: number;
   failedRuns: number;
   cancelledRuns: number;
+  preparingRuns: number;
+  waitingForCodexRuns: number;
   runningRuns: number;
   queuedRuns: number;
   config: BatchConfig;
@@ -256,6 +265,8 @@ export interface CodexAuthValidationResponse {
   status: Exclude<CodexAuthValidationStatus, "checking">;
   checkedAt: string;
   source: CodexCredentialSource;
+  authMode: string | null;
+  accountLabel: string | null;
   message: string;
 }
 

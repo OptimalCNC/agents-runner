@@ -53,6 +53,8 @@ function buildBatchSummary(batch: Batch): BatchSummary {
     completedRuns: batch.runs.filter((r) => r.status === "completed").length,
     failedRuns: batch.runs.filter((r) => r.status === "failed").length,
     cancelledRuns: batch.runs.filter((r) => r.status === "cancelled").length,
+    preparingRuns: batch.runs.filter((r) => r.status === "preparing").length,
+    waitingForCodexRuns: batch.runs.filter((r) => r.status === "waiting_for_codex").length,
     runningRuns: batch.runs.filter((r) => r.status === "running").length,
     queuedRuns: batch.runs.filter((r) => r.status === "queued").length,
     config: batch.config,

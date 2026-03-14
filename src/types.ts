@@ -11,6 +11,8 @@ export type BatchStatus =
 
 export type RunStatus =
   | "queued"
+  | "preparing"
+  | "waiting_for_codex"
   | "running"
   | "completed"
   | "failed"
@@ -238,6 +240,8 @@ export interface BatchSummary {
   completedRuns: number;
   failedRuns: number;
   cancelledRuns: number;
+  preparingRuns: number;
+  waitingForCodexRuns: number;
   runningRuns: number;
   queuedRuns: number;
   config: BatchConfig;
@@ -334,6 +338,8 @@ export interface CodexAuthValidationResponse {
   status: Exclude<CodexAuthValidationStatus, "checking">;
   checkedAt: string;
   source: CodexCredentialSource;
+  authMode: string | null;
+  accountLabel: string | null;
   message: string;
 }
 

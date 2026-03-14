@@ -2,6 +2,8 @@ import { useAppStore } from "../state/store.js";
 import { useCodexAuthStore } from "../state/codexAuth.js";
 import { PlusIcon } from "../icons.js";
 
+import type { CodexAuthState } from "../state/codexAuth.js";
+
 export function Navbar() {
   const conn = useAppStore((s) => s.connectionStatus);
   const auth = useCodexAuthStore();
@@ -9,6 +11,7 @@ export function Navbar() {
   const connLabel = conn === "connected" ? "Connected" : conn === "disconnected" ? "Disconnected" : "Connecting\u2026";
   const connDotClass = `conn-dot${conn === "connected" ? " is-connected" : conn === "disconnected" ? " is-error" : ""}`;
   const runtimeBadgeClass = `runtime-badge is-${auth.status}`;
+  const runtimeBadgeLabel = getRuntimeBadgeLabel(auth);
 
   function handleNewBatch() {
     useAppStore.setState({ drawerOpen: true });
@@ -40,7 +43,7 @@ export function Navbar() {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" />
           </svg>
-          <span>Codex auth</span>
+          <span className="runtime-badge-label">{runtimeBadgeLabel}</span>
         </div>
         <button className="btn btn-primary" type="button" onClick={handleNewBatch}>
           <PlusIcon />
@@ -49,4 +52,12 @@ export function Navbar() {
       </div>
     </nav>
   );
+}
+
+function getRuntimeBadgeLabel(auth: CodexAuthState): string {
+  if (auth.status === "checking") return "Checking Codex\u2026";
+  if (auth.status === "invalid") return "Codex disconnected";
+  if (auth.source === "apiKey") return "Codex API key";
+  if (auth.accountLabel) return `Codex · ${auth.accountLabel}`;
+  return "Codex connected";
 }

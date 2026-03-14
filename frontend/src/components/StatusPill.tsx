@@ -1,14 +1,17 @@
-import { formatStatus } from "../utils/format.js";
+import { formatStatusLabel, isActiveRunStatus } from "../utils/runStatus.js";
 
 interface Props {
   status: string;
 }
 
 export function StatusPill({ status }: Props) {
+  const pillClassName = `pill pill-${status.replace(/_/g, "-")}`;
+  const showSpinner = isActiveRunStatus(status);
+
   return (
-    <span className={`pill pill-${status}`}>
-      {status === "running" && <span className="spinner" />}
-      {formatStatus(status)}
+    <span className={pillClassName}>
+      {showSpinner && <span className="spinner" />}
+      {formatStatusLabel(status)}
     </span>
   );
 }

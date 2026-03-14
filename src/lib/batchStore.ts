@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 
+import { isRunPendingStatus } from "./runStatus";
+
 import type {
   Batch,
   BatchConfig,
@@ -71,6 +73,8 @@ function buildSummary(batch: Batch): BatchSummary {
   const completedRuns = batch.runs.filter((run) => run.status === "completed").length;
   const failedRuns = batch.runs.filter((run) => run.status === "failed").length;
   const cancelledRuns = batch.runs.filter((run) => run.status === "cancelled").length;
+  const preparingRuns = batch.runs.filter((run) => run.status === "preparing").length;
+  const waitingForCodexRuns = batch.runs.filter((run) => run.status === "waiting_for_codex").length;
   const runningRuns = batch.runs.filter((run) => run.status === "running").length;
   const queuedRuns = batch.runs.filter((run) => run.status === "queued").length;
 
@@ -87,6 +91,8 @@ function buildSummary(batch: Batch): BatchSummary {
     completedRuns,
     failedRuns,
     cancelledRuns,
+    preparingRuns,
+    waitingForCodexRuns,
     runningRuns,
     queuedRuns,
     config: batch.config,
@@ -374,7 +380,7 @@ export function createBatchStore(dataDirectory: string): BatchStore {
         batch.error = "Interrupted by server restart.";
 
         for (const run of batch.runs) {
-          if (run.status === "running" || run.status === "queued") {
+          if (isRunPendingStatus(run.status)) {
             run.status = "failed";
             run.completedAt = nowIso();
             run.error = "Interrupted by server restart.";

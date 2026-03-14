@@ -5,6 +5,7 @@ import { useAppStore } from "../state/store.js";
 import type { Run, RunTurn, StreamItem } from "../types.js";
 import { formatDate } from "../utils/format.js";
 import { renderMarkdown } from "../utils/markdown.js";
+import { isPendingRunStatus } from "../utils/runStatus.js";
 import { BotIcon, PlayIcon, ChevronRightIcon } from "../icons.js";
 import { StreamItemView, getStreamItemGroupMeta } from "./StreamItemView.js";
 
@@ -38,7 +39,7 @@ function getTranscriptTurns(run: Run): RunTurn[] {
 }
 
 function canContinueRun(run: Run): boolean {
-  if (run.status === "queued" || run.status === "running") {
+  if (isPendingRunStatus(run.status)) {
     return false;
   }
 
@@ -50,7 +51,7 @@ function buildOptimisticTurn(run: Run, prompt: string): RunTurn {
     id: `optimistic-turn-${Date.now()}`,
     index: run.turns.length,
     prompt,
-    status: "queued",
+    status: "waiting_for_codex",
     submittedAt: new Date().toISOString(),
     startedAt: null,
     completedAt: null,
@@ -59,6 +60,25 @@ function buildOptimisticTurn(run: Run, prompt: string): RunTurn {
     usage: null,
     items: [],
   };
+}
+
+function getTurnPlaceholder(status: RunTurn["status"], isSubmitting: boolean): string {
+  if (isSubmitting) {
+    return "Sending follow-up to Codex...";
+  }
+
+  switch (status) {
+    case "queued":
+      return "Waiting for an available local concurrency slot...";
+    case "preparing":
+      return "Preparing the worktree and starting Codex...";
+    case "waiting_for_codex":
+      return "Codex thread is ready. Waiting for the turn to begin...";
+    case "running":
+      return "Codex is working on this turn...";
+    default:
+      return "No streamed activity recorded.";
+  }
 }
 
 function getGroupKey(item: StreamItem): string | null {
@@ -159,7 +179,7 @@ export function TranscriptPanel({ batchId, run }: Props) {
     return alreadyMaterialized ? turns : [...turns, pendingTurn];
   }, [pendingTurn, submitting, turns]);
   const isRunnable = canContinueRun(run);
-  const isRunActive = run.status === "queued" || run.status === "running";
+  const isRunActive = isPendingRunStatus(run.status);
   const composerDisabled = submitting || isRunActive || !Boolean(run.threadId && run.workingDirectory);
   const submitLabel = submitting ? "Sending..." : isRunActive ? "Working..." : "Continue Run";
 
@@ -230,11 +250,7 @@ export function TranscriptPanel({ batchId, run }: Props) {
 
                   {turn.items.length === 0 ? (
                     <div className="tx-agent-placeholder">
-                      {submitting && pendingTurn?.id === turn.id
-                        ? "Sending follow-up to Codex..."
-                        : turn.status === "running" || turn.status === "queued"
-                          ? "Codex is working on this turn..."
-                          : "No streamed activity recorded."}
+                      {getTurnPlaceholder(turn.status, submitting && pendingTurn?.id === turn.id)}
                     </div>
                   ) : (
                     groupTurnItems(turn.items).map((entry, entryIndex) => (
@@ -267,7 +283,7 @@ export function TranscriptPanel({ batchId, run }: Props) {
                 ? "Sending follow-up to Codex..."
                 : isRunnable
                 ? "Send a follow-up message to continue this run..."
-                : run.status === "running" || run.status === "queued"
+                : isPendingRunStatus(run.status)
                 ? "Wait for the current turn to finish before sending another message."
                 : "This run cannot be continued until it has a thread and working directory."
             }

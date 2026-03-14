@@ -11,6 +11,7 @@ import {
   removeWorktree,
 } from "./git";
 import { isAbortError } from "./process";
+import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 
 import type {
   Batch,
@@ -244,7 +245,7 @@ function syncRunDerivedState(run: Run): void {
   run.items = buildFlattenedItems(run.turns);
 
   const firstStartedAt = run.turns.find((turn) => turn.startedAt)?.startedAt ?? null;
-  if (firstStartedAt) {
+  if (!run.startedAt && firstStartedAt) {
     run.startedAt = firstStartedAt;
   }
 }
@@ -338,7 +339,7 @@ class BatchDeleteCleanupError extends Error {
 }
 
 function hasActiveRuns(batch: Batch | null): boolean {
-  return batch?.runs.some((run) => run.status === "running" || run.status === "queued") ?? false;
+  return batch?.runs.some((run) => isRunPendingStatus(run.status)) ?? false;
 }
 
 async function waitForBatchToSettle(store: BatchStore, batchId: string, timeoutMs: number = BATCH_SETTLE_TIMEOUT_MS): Promise<void> {
@@ -518,7 +519,7 @@ function describeItem(item: Record<string, unknown>): string {
 }
 
 function deriveBatchStatus(batch: Batch): BatchStatus {
-  if (batch.cancelRequested && batch.runs.every((run) => run.status === "cancelled" || run.status === "completed" || run.status === "failed")) {
+  if (batch.cancelRequested && batch.runs.every((run) => isRunTerminalStatus(run.status))) {
     return "cancelled";
   }
 
@@ -526,11 +527,11 @@ function deriveBatchStatus(batch: Batch): BatchStatus {
     return "failed";
   }
 
-  if (batch.runs.every((run) => run.status === "completed")) {
+  if (batch.runs.length > 0 && batch.runs.every((run) => run.status === "completed")) {
     return "completed";
   }
 
-  if (batch.runs.some((run) => run.status === "running")) {
+  if (batch.runs.some((run) => isRunPendingStatus(run.status))) {
     return "running";
   }
 
@@ -673,6 +674,9 @@ async function streamTurnEvents(
           const threadId = (evt.thread_id ?? evt.id) as string | undefined;
           if (threadId) {
             run.threadId = threadId;
+            if (!isRunTerminalStatus(turn.status) && turn.status !== "running") {
+              turn.status = "waiting_for_codex";
+            }
             appendLog(run, "info", `Thread started: ${threadId}`);
           }
           break;
@@ -778,11 +782,11 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
       return;
     }
 
-    run.status = "running";
+    run.startedAt ||= nowIso();
     run.completedAt = null;
     run.error = null;
-    turn.status = "running";
-    turn.startedAt ||= nowIso();
+    turn.status = "preparing";
+    turn.startedAt = null;
     turn.completedAt = null;
     turn.error = null;
     appendLog(run, "info", "Preparing git worktree.");
@@ -1004,12 +1008,13 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
   }
 
   const nextTurn = buildRunTurn(prompt, runSnapshot.index, runSnapshot.turns.length);
+  nextTurn.status = "waiting_for_codex";
   const controller = new AbortController();
   execution.runControllers.set(runId, controller);
 
   store.updateRun(batchId, runId, (run) => {
     run.turns.push(nextTurn);
-    run.status = "running";
+    run.startedAt ||= nowIso();
     run.completedAt = null;
     run.error = null;
     run.review = null;

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { apiValidateCodexAuth } from "./api.js";
+import { apiLoadCodexAuthStatus } from "./api.js";
 import { ensureModelCatalogLoaded } from "./modelCatalog.js";
 import { useAppStore } from "./store.js";
 
@@ -12,6 +12,8 @@ export interface CodexAuthState {
   status: CodexAuthValidationStatus;
   checkedAt: string | null;
   source: CodexCredentialSource;
+  authMode: string | null;
+  accountLabel: string | null;
   message: string;
 }
 
@@ -19,6 +21,8 @@ export const useCodexAuthStore = create<CodexAuthState>(() => ({
   status: "checking",
   checkedAt: null,
   source: "none",
+  authMode: null,
+  accountLabel: null,
   message: CHECKING_MESSAGE,
 }));
 
@@ -45,17 +49,21 @@ export async function refreshCodexAuthValidation(): Promise<void> {
       status: "checking",
       checkedAt: null,
       source,
+      authMode: null,
+      accountLabel: null,
       message: CHECKING_MESSAGE,
     });
 
     inFlight = (async () => {
       try {
-        applyValidation(await apiValidateCodexAuth());
+        applyValidation(await apiLoadCodexAuthStatus());
       } catch (error) {
         useCodexAuthStore.setState({
           status: "invalid",
           checkedAt: new Date().toISOString(),
           source,
+          authMode: null,
+          accountLabel: null,
           message: (error as Error).message || "Codex authentication validation failed.",
         });
       } finally {

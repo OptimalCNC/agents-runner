@@ -69,8 +69,8 @@ export async function apiLoadModels(refresh = false): Promise<ModelCatalogRespon
   return fetchJson<ModelCatalogResponse>(refresh ? "/api/models?refresh=1" : "/api/models");
 }
 
-export async function apiValidateCodexAuth(): Promise<CodexAuthValidationResponse> {
-  return fetchJson<CodexAuthValidationResponse>("/api/auth/validate");
+export async function apiLoadCodexAuthStatus(): Promise<CodexAuthValidationResponse> {
+  return fetchJson<CodexAuthValidationResponse>("/api/auth/status");
 }
 
 export async function apiCancelBatch(batchId: string): Promise<void> {

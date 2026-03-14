@@ -6,17 +6,7 @@ import { RunCard } from "./RunCard.js";
 import { RunDetail } from "./RunDetail.js";
 import { ClockIcon, FolderIcon, XIcon, PlayIcon } from "../icons.js";
 import { formatDate, formatRelative, formatModeLabel } from "../utils/format.js";
-
-function summarizeProgress(batch: { completedRuns?: number; failedRuns?: number; cancelledRuns?: number }) {
-  const c = batch.completedRuns ?? 0;
-  const f = batch.failedRuns ?? 0;
-  const k = batch.cancelledRuns ?? 0;
-  const parts: string[] = [];
-  if (c) parts.push(`${c} done`);
-  if (f) parts.push(`${f} failed`);
-  if (k) parts.push(`${k} cancelled`);
-  return parts.join(", ") || "Waiting\u2026";
-}
+import { summarizeRunCounts } from "../utils/runStatus.js";
 
 export function BatchDetail() {
   const batch = useAppStore(selectSelectedBatch);
@@ -58,6 +48,10 @@ export function BatchDetail() {
   const completedRuns = batch.runs.filter((r) => r.status === "completed").length;
   const failedRuns = batch.runs.filter((r) => r.status === "failed").length;
   const cancelledRuns = batch.runs.filter((r) => r.status === "cancelled").length;
+  const preparingRuns = batch.runs.filter((r) => r.status === "preparing").length;
+  const waitingForCodexRuns = batch.runs.filter((r) => r.status === "waiting_for_codex").length;
+  const runningRuns = batch.runs.filter((r) => r.status === "running").length;
+  const queuedRuns = batch.runs.filter((r) => r.status === "queued").length;
 
   async function handleCancel() {
     try {
@@ -151,7 +145,15 @@ export function BatchDetail() {
         <div className="section-header">
           <div className="section-title">Runs</div>
           <span className="text-muted text-sm">
-            {summarizeProgress({ completedRuns, failedRuns, cancelledRuns })}
+            {summarizeRunCounts({
+              completedRuns,
+              failedRuns,
+              cancelledRuns,
+              preparingRuns,
+              waitingForCodexRuns,
+              runningRuns,
+              queuedRuns,
+            })}
           </span>
         </div>
         {batch.runs.length === 0 ? (

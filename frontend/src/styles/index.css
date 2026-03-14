@@ -168,12 +168,19 @@ button { cursor: pointer; }
   display: none;
   align-items: center;
   gap: 6px;
+  max-width: min(320px, 32vw);
   font-size: 12px;
   color: var(--text-tertiary);
   background: var(--bg-elevated);
   padding: 4px 10px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
+}
+.runtime-badge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .runtime-badge.is-checking {
   color: var(--warning);
@@ -503,6 +510,8 @@ button { cursor: pointer; }
 }
 
 .pill-queued { background: var(--bg-overlay); color: var(--text-tertiary); }
+.pill-preparing { background: var(--info-soft); color: var(--info); }
+.pill-waiting-for-codex { background: var(--warning-soft); color: var(--warning); }
 .pill-running { background: var(--accent-soft); color: var(--accent-hover); }
 .pill-completed { background: var(--success-soft); color: var(--success); }
 .pill-failed { background: var(--danger-soft); color: var(--danger); }
@@ -510,6 +519,8 @@ button { cursor: pointer; }
 .pill-pending { background: var(--bg-overlay); color: var(--text-tertiary); }
 .pill-generating { background: var(--info-soft); color: var(--info); }
 
+.pill-preparing .spinner,
+.pill-waiting-for-codex .spinner,
 .pill-running .spinner {
   width: 10px; height: 10px;
   border: 1.5px solid transparent;

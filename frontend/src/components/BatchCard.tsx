@@ -6,6 +6,7 @@ import { StatusPill } from "./StatusPill.js";
 import { FolderIcon, XIcon } from "../icons.js";
 import { formatRelative, formatModeLabel } from "../utils/format.js";
 import { getPathLeaf, getProjectPath } from "../utils/paths.js";
+import { summarizeRunCounts } from "../utils/runStatus.js";
 
 interface Props {
   summary: BatchSummary;
@@ -78,15 +79,7 @@ export function BatchCard({ summary }: Props) {
           <div className={`progress-bar-fill${hasFail ? " has-failures" : ""}`} style={{ width: `${progress}%` }} />
         </div>
         <div className="progress-label">
-          {totalDone === 0 && summary.runningRuns === 0
-            ? "Waiting\u2026"
-            : [
-                summary.completedRuns > 0 ? `${summary.completedRuns} done` : "",
-                summary.failedRuns > 0 ? `${summary.failedRuns} failed` : "",
-                summary.cancelledRuns > 0 ? `${summary.cancelledRuns} cancelled` : "",
-              ]
-                .filter(Boolean)
-                .join(", ") || "Waiting\u2026"}
+          {summarizeRunCounts(summary)}
           {" "}({totalDone}/{summary.totalRuns})
         </div>
       </div>
