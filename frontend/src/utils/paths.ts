@@ -1,5 +1,9 @@
 import type { BatchSummary } from "../types.js";
 
+function normalizeProjectPathValue(targetPath: string | null | undefined): string {
+  return String(targetPath ?? "").trim();
+}
+
 export function deriveParentPath(targetPath: string | null | undefined): string {
   const source = String(targetPath ?? "").trim();
   if (!source) return "";
@@ -21,4 +25,27 @@ export function getPathLeaf(targetPath: string | null | undefined): string {
 
 export function getProjectPath(batch: BatchSummary): string {
   return batch?.config?.projectPath || "";
+}
+
+export function buildProjectPathOptions(projectPaths: string[]) {
+  const normalizedPaths = Array.from(
+    new Set(projectPaths.map((projectPath) => normalizeProjectPathValue(projectPath)).filter(Boolean)),
+  ).sort((left, right) => {
+    const byLeaf = getPathLeaf(left).localeCompare(getPathLeaf(right));
+    return byLeaf || left.localeCompare(right);
+  });
+
+  const leafCounts = new Map<string, number>();
+  for (const projectPath of normalizedPaths) {
+    const leaf = getPathLeaf(projectPath) || projectPath;
+    leafCounts.set(leaf, (leafCounts.get(leaf) || 0) + 1);
+  }
+
+  return normalizedPaths.map((projectPath) => {
+    const leaf = getPathLeaf(projectPath) || projectPath;
+    return {
+      value: projectPath,
+      label: leafCounts.get(leaf)! > 1 ? projectPath : leaf,
+    };
+  });
 }

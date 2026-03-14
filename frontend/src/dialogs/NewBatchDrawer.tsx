@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useAppStore } from "../state/store.js";
 import { apiInspectProject, apiSubmitBatch } from "../state/api.js";
-import { deriveParentPath } from "../utils/paths.js";
-import { normalizeMode, formatReasoningEffortLabel } from "../utils/format.js";
+import { buildProjectPathOptions, deriveParentPath } from "../utils/paths.js";
+import { formatReasoningEffortLabel } from "../utils/format.js";
+import { loadRecentProjectPaths, rememberRecentProjectPath } from "../utils/recentProjectPaths.js";
 import { ModelPicker } from "./ModelPicker.js";
 import { FolderBrowser, openBrowser } from "./FolderBrowser.js";
 import { PlayIcon } from "../icons.js";
@@ -31,11 +32,13 @@ function closeDrawer() {
 
 export function NewBatchDrawer() {
   const isOpen = useAppStore((s) => s.drawerOpen);
+  const batches = useAppStore((s) => s.batches);
   const inspect = useAppStore((s) => s.projectInspect);
   const modelCatalog = useAppStore((s) => s.modelCatalog);
 
   const [mode, setMode] = useState<"repeated" | "generated">("repeated");
   const [projectPath, setProjectPath] = useState("");
+  const [recentProjectPaths, setRecentProjectPaths] = useState<string[]>([]);
   const [worktreeRoot, setWorktreeRoot] = useState("");
   const [runCount, setRunCount] = useState("10");
   const [concurrency, setConcurrency] = useState("10");
@@ -60,6 +63,7 @@ export function NewBatchDrawer() {
     const c = useAppStore.getState().config;
     setMode("repeated");
     setProjectPath("");
+    setRecentProjectPaths(loadRecentProjectPaths());
     setWorktreeRoot("");
     setRunCount(String(c?.defaults?.runCount ?? 10));
     setConcurrency(String(c?.defaults?.runCount ?? 10));
@@ -94,6 +98,10 @@ export function NewBatchDrawer() {
     if (shouldReplace) setWorktreeRoot(suggested);
   }
 
+  function rememberProjectPath(path: string) {
+    setRecentProjectPaths(rememberRecentProjectPath(path));
+  }
+
   function syncMaxConcurrency(count: string) {
     const n = Number(count || "1");
     if (Number(concurrency) > n) setConcurrency(String(n));
@@ -111,6 +119,7 @@ export function NewBatchDrawer() {
       const payload = await apiInspectProject(path);
       const context = payload.projectContext;
       useAppStore.setState({ projectInspect: context });
+      rememberProjectPath(context.projectPath);
       setBaseRef(resolveDefaultBaseRef(context));
       updateWorktreeRoot(deriveParentPath(context.projectPath));
       setInspectStatus("Git project ready.");
@@ -139,6 +148,11 @@ export function NewBatchDrawer() {
     scheduleAutoInspect(value);
   }
 
+  function handleRecentProjectSelect(value: string) {
+    rememberProjectPath(value);
+    handleProjectPathChange(value);
+  }
+
   // Reasoning effort sync with model
   const resolvedModel = model
     ? findCatalogModelByValue(model, modelCatalog.models)
@@ -154,6 +168,12 @@ export function NewBatchDrawer() {
   const baseRefOptions: Array<{ value: string; label: string }> = [];
   const branchName = inspect?.branchName?.trim();
   const headSha = inspect?.headSha?.trim();
+  const recentProjectOptions = buildProjectPathOptions([
+    ...recentProjectPaths,
+    ...batches.map((batch) => batch.config.projectPath),
+  ])
+    .filter((option) => option.value !== projectPath.trim())
+    .slice(0, 6);
   if (branchName) baseRefOptions.push({ value: branchName, label: `${branchName} (branch)` });
   if (headSha) baseRefOptions.push({ value: headSha, label: `${headSha} (HEAD)` });
   if (baseRefOptions.length === 0) baseRefOptions.push({ value: "", label: "Current HEAD" });
@@ -188,6 +208,7 @@ export function NewBatchDrawer() {
       const response = await apiSubmitBatch(payload);
       const { setBatchDetail, syncSelectedBatch } = useAppStore.getState();
       useAppStore.setState({ selectedBatchId: response.batch.id, selectedRunId: null });
+      rememberProjectPath(response.batch.config.projectPath);
 
       const currentFilters = useAppStore.getState().projectFilters;
       if (currentFilters.length > 0 && !currentFilters.includes(response.batch.config.projectPath)) {
@@ -298,6 +319,24 @@ export function NewBatchDrawer() {
                 </svg>
               </button>
             </div>
+            {recentProjectOptions.length > 0 && (
+              <div className="recent-projects">
+                <span className="recent-projects-label">Recent folders</span>
+                <div className="recent-projects-list">
+                  {recentProjectOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      className="filter-chip recent-project-chip"
+                      type="button"
+                      title={option.value}
+                      onClick={() => handleRecentProjectSelect(option.value)}
+                    >
+                      <span className="filter-chip-label">{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <span className="form-hint">{inspectStatus}</span>
             {inspect && (
               <div className="inspect-box">

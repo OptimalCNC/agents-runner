@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { AppConfig, BatchSummary, Batch, ProjectContext, CodexModel, WorktreeInspection } from "../types.js";
-import { getProjectPath, getPathLeaf } from "../utils/paths.js";
+import { getProjectPath, buildProjectPathOptions } from "../utils/paths.js";
 import { normalizeMode } from "../utils/format.js";
 
 // --- Types ---
@@ -93,26 +93,7 @@ interface AppState {
 }
 
 export function getProjectFilterOptions(batches: BatchSummary[]) {
-  const projectPaths = Array.from(
-    new Set(batches.map(getProjectPath).filter(Boolean)),
-  ).sort((left, right) => {
-    const byLeaf = getPathLeaf(left).localeCompare(getPathLeaf(right));
-    return byLeaf || left.localeCompare(right);
-  });
-
-  const leafCounts = new Map<string, number>();
-  for (const projectPath of projectPaths) {
-    const leaf = getPathLeaf(projectPath) || projectPath;
-    leafCounts.set(leaf, (leafCounts.get(leaf) || 0) + 1);
-  }
-
-  return projectPaths.map((projectPath) => {
-    const leaf = getPathLeaf(projectPath) || projectPath;
-    return {
-      value: projectPath,
-      label: leafCounts.get(leaf)! > 1 ? projectPath : leaf,
-    };
-  });
+  return buildProjectPathOptions(batches.map(getProjectPath));
 }
 
 export const selectSelectedBatch = (s: AppState) =>
