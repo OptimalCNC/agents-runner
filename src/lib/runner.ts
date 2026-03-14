@@ -4,6 +4,7 @@ import { Codex } from "@openai/codex-sdk";
 
 import {
   collectWorktreeReview,
+  createWorktreeBranch,
   createWorktree,
   inspectProject,
   inspectWorktreeChanges,
@@ -33,6 +34,7 @@ const WORKTREE_REMOVE_RETRY_DELAY_MS = 500;
 const WORKTREE_REMOVE_RETRY_ATTEMPTS = 6;
 const BATCH_SETTLE_TIMEOUT_MS = 5_000;
 const NON_INTERACTIVE_APPROVAL_POLICY = "never" as const;
+const RUN_ID_LENGTH = 5;
 
 interface ExecutionState {
   titleController: AbortController | null;
@@ -379,9 +381,33 @@ async function removeWorktreeWithRetries(
   return result!;
 }
 
-function buildRunRecord(task: GenerationTask, index: number): Run {
+export function createRunId(existingRunIds: ReadonlySet<string>): string {
+  for (let attempt = 0; attempt < 256; attempt += 1) {
+    const candidate = Math.floor(Math.random() * (36 ** RUN_ID_LENGTH))
+      .toString(36)
+      .padStart(RUN_ID_LENGTH, "0");
+
+    if (!existingRunIds.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  while (true) {
+    const candidate = `${Date.now().toString(36)}${Math.floor(Math.random() * 36).toString(36)}`
+      .slice(-RUN_ID_LENGTH)
+      .padStart(RUN_ID_LENGTH, "0");
+
+    if (!existingRunIds.has(candidate)) {
+      return candidate;
+    }
+  }
+}
+
+function buildRunRecord(task: GenerationTask, index: number, existingRunIds: ReadonlySet<string>): Run {
+  const runId = createRunId(existingRunIds);
+
   return {
-    id: `run-${index + 1}-${Math.random().toString(36).slice(2, 8)}`,
+    id: runId,
     index,
     title: task.title,
     prompt: task.prompt,
@@ -762,6 +788,54 @@ async function refreshRunReview(
   });
 }
 
+export async function createRunBranch(
+  store: BatchStore,
+  batchId: string,
+  runId: string,
+  branchName: string,
+): Promise<Batch | null> {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
+  }
+
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  if (!runSnapshot) {
+    throw new Error("Run not found.");
+  }
+
+  if (!runSnapshot.worktreePath) {
+    throw new Error("This run does not have a worktree yet.");
+  }
+
+  const nextBranchName = String(branchName ?? "").trim();
+  if (!nextBranchName) {
+    throw new Error("Branch name is required.");
+  }
+
+  const execution = getExecutionState(batchId);
+  if (execution.runControllers.has(runId)) {
+    throw new Error("This run is currently active.");
+  }
+
+  await createWorktreeBranch(runSnapshot.worktreePath, nextBranchName);
+  const review = await collectWorktreeReview(runSnapshot.worktreePath).catch(() => null);
+
+  store.updateRun(batchId, runId, (run) => {
+    run.review = review ?? {
+      currentBranch: nextBranchName,
+      headSha: run.review?.headSha ?? null,
+      statusShort: run.review?.statusShort ?? "",
+      diffStat: run.review?.diffStat ?? "",
+      trackedDiff: run.review?.trackedDiff ?? "",
+      untrackedFiles: run.review?.untrackedFiles ?? [],
+    };
+    appendLog(run, "info", `Created branch ${nextBranchName}.`);
+  });
+
+  return store.getBatch(batchId);
+}
+
 async function executeRun(store: BatchStore, batchId: string, runId: string, projectContext: ProjectContext): Promise<void> {
   const batch = store.getBatch(batchId)!;
   const runSnapshot = batch.runs.find((entry) => entry.id === runId)!;
@@ -924,8 +998,12 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
             prompt: batch.config.prompt,
           }));
 
+    const existingRunIds = new Set(batch.runs.map((run) => run.id));
+
     for (const [index, task] of tasks.entries()) {
-      store.appendRun(batchId, buildRunRecord(task, index));
+      const run = buildRunRecord(task, index, existingRunIds);
+      existingRunIds.add(run.id);
+      store.appendRun(batchId, run);
     }
 
     const latestBatch = store.getBatch(batchId)!;

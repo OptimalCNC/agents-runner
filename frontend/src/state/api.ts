@@ -94,6 +94,16 @@ export async function apiGetRunReview(batchId: string, runId: string): Promise<{
   );
 }
 
+export async function apiCreateRunBranch(batchId: string, runId: string, branchName: string): Promise<{ batch: Batch }> {
+  return fetchJson<{ batch: Batch }>(
+    `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/branch`,
+    {
+      method: "POST",
+      body: JSON.stringify({ branchName }),
+    },
+  );
+}
+
 export async function apiContinueRun(batchId: string, runId: string, prompt: string): Promise<{ batch: Batch }> {
   return fetchJson<{ batch: Batch }>(
     `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/continue`,

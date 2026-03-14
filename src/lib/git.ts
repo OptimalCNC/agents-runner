@@ -151,7 +151,9 @@ export async function createWorktree({
 }
 
 export async function collectWorktreeReview(worktreePath: string): Promise<RunReview> {
-  const [statusShort, diffStat, trackedDiff, untracked] = await Promise.all([
+  const [currentBranch, headSha, statusShort, diffStat, trackedDiff, untracked] = await Promise.all([
+    runCommand("git", ["-C", worktreePath, "branch", "--show-current"], { allowFailure: true }),
+    runCommand("git", ["-C", worktreePath, "rev-parse", "--short=12", "HEAD"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "status", "--short"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "diff", "--stat"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "diff", "--no-ext-diff", "--submodule=diff"], {
@@ -188,11 +190,22 @@ export async function collectWorktreeReview(worktreePath: string): Promise<RunRe
   }
 
   return {
+    currentBranch: currentBranch.stdout.trim() || null,
+    headSha: headSha.stdout.trim() || null,
     statusShort: statusShort.stdout.trim(),
     diffStat: diffStat.stdout.trim(),
     trackedDiff: trackedDiff.stdout.trim(),
     untrackedFiles,
   };
+}
+
+export async function createWorktreeBranch(worktreePath: string, branchName: string): Promise<void> {
+  const nextBranchName = String(branchName ?? "").trim();
+  if (!nextBranchName) {
+    throw new Error("Branch name is required.");
+  }
+
+  await runCommand("git", ["-C", worktreePath, "switch", "-c", nextBranchName]);
 }
 
 interface StatusLineCounts {

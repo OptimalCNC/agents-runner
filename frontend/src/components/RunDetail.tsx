@@ -76,7 +76,9 @@ export function RunDetail({ run }: Props) {
       <div className="run-detail-header">
         <div className="run-detail-header-main">
           <div className="run-detail-title">{run.title}</div>
-          <div className="run-detail-subtitle">
+          <div className="run-detail-subtitle" title={run.id}>
+            Run {run.id}
+            {" · "}
             {run.turns.length} {run.turns.length === 1 ? "turn" : "turns"}
             {run.threadId ? ` · Thread ID ${run.threadId}` : ""}
           </div>

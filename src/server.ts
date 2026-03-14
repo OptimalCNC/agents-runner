@@ -10,7 +10,15 @@ import { detectCodexAuthStatus } from "./lib/codexAuth";
 import { createCodexModelCatalog } from "./lib/codexModels";
 import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git";
 import { createBatchStore } from "./lib/batchStore";
-import { cancelBatch, continueRun, deleteBatch, generateBatchTitle, executeBatch, previewBatchDelete } from "./lib/runner";
+import {
+  cancelBatch,
+  continueRun,
+  createRunBranch,
+  deleteBatch,
+  generateBatchTitle,
+  executeBatch,
+  previewBatchDelete,
+} from "./lib/runner";
 
 import type { BatchMode, CodexAuthValidationResponse } from "./types";
 
@@ -199,6 +207,15 @@ function normalizeContinueRunPayload(body: Record<string, unknown>): { prompt: s
   }
 
   return { prompt };
+}
+
+function normalizeCreateBranchPayload(body: Record<string, unknown>): { branchName: string } {
+  const branchName = normalizeString(body.branchName);
+  if (!branchName) {
+    throw new Error("Branch name is required.");
+  }
+
+  return { branchName };
 }
 
 async function serveStaticFile(response: ServerResponse, pathname: string): Promise<void> {
@@ -425,6 +442,31 @@ async function handleApi(request: IncomingMessage, response: ServerResponse, url
       sendJson(response, 202, { batch });
     } catch (error) {
       sendError(response, 409, (error as Error).message || "Failed to continue run.");
+    }
+    return;
+  }
+
+  const branchMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/runs\/([^/]+)\/branch$/);
+  if (request.method === "POST" && branchMatch) {
+    const body = await readBody(request);
+    const payload = normalizeCreateBranchPayload(body);
+
+    try {
+      const batch = await createRunBranch(
+        store,
+        decodeURIComponent(branchMatch[1]),
+        decodeURIComponent(branchMatch[2]),
+        payload.branchName,
+      );
+
+      if (!batch) {
+        sendError(response, 404, "Batch not found.");
+        return;
+      }
+
+      sendJson(response, 200, { batch });
+    } catch (error) {
+      sendError(response, 409, (error as Error).message || "Failed to create branch.");
     }
     return;
   }
