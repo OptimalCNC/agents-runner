@@ -598,48 +598,64 @@ button { cursor: pointer; }
   gap: 5px;
 }
 
+.batch-detail-meta .meta-item-project-base {
+  min-width: 0;
+}
+
+.batch-detail-meta .meta-item-project-base svg {
+  flex: none;
+}
+
+.batch-detail-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta-item-separator {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.meta-item-prefix {
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.batch-detail-meta .meta-item-project-base .mono {
+  flex-shrink: 0;
+}
+
+.batch-detail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 24px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.batch-detail-summary .meta-item-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.meta-item-value {
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .batch-detail-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-}
-
-/* Info cards grid */
-.info-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-  margin-bottom: 24px;
-}
-
-.info-card {
-  padding: 14px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-
-.info-card-label {
-  font-size: 11px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-  margin-bottom: 4px;
-}
-
-.info-card-value {
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.info-card-value.mono {
-  font-family: var(--font-mono);
-  font-size: 12px;
 }
 
 /* ───────────────────── Generated Tasks ───────────────────── */
@@ -720,7 +736,6 @@ button { cursor: pointer; }
   align-items: flex-start;
   justify-content: space-between;
   gap: 6px;
-  margin-bottom: 6px;
 }
 
 .run-card-title {
@@ -732,16 +747,11 @@ button { cursor: pointer; }
   flex: 1;
 }
 
-.run-card-meta {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
 .run-card .tag-row {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 .tag {
@@ -764,10 +774,15 @@ button { cursor: pointer; }
 
 .run-detail-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.run-detail-header-main {
+  flex: 1;
+  min-width: 0;
 }
 
 .run-detail-title {
@@ -781,16 +796,77 @@ button { cursor: pointer; }
   color: var(--text-tertiary);
 }
 
+.run-detail-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.run-detail-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.run-detail-fact-directory {
+  padding-inline: 12px;
+}
+
+.run-detail-fact-label {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.run-detail-fact-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.run-detail-fact-value.mono {
+  max-width: min(56ch, 100%);
+  font-size: 11px;
+}
+
 .run-detail-header-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .run-detail-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.9fr) minmax(300px, 0.8fr);
   gap: 0;
+}
+
+.run-detail-alert {
+  margin: 16px 16px 0;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.run-detail-alert-danger {
+  background: var(--danger-soft);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: var(--danger);
 }
 
 .tab-panel {
@@ -1574,31 +1650,6 @@ button { cursor: pointer; }
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-
-.meta-group {
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-bottom: 12px;
-}
-
-.meta-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-}
-
-.meta-row-label {
-  color: var(--text-secondary);
-  font-weight: 500;
-  min-width: 110px;
-}
-
-.meta-row-value {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 /* ───────────────────── Review Items ───────────────────── */
@@ -2486,7 +2537,7 @@ select {
 
   .runs-grid { grid-template-columns: 1fr; }
 
-  .info-cards { grid-template-columns: repeat(2, 1fr); }
+  .batch-detail-summary { gap: 10px; }
 
   .transcript-scroll {
     padding: 14px 14px 8px;

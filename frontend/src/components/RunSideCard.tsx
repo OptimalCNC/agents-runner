@@ -1,6 +1,5 @@
 import { useAppStore } from "../state/store.js";
 import type { Run } from "../types.js";
-import { OverviewTab } from "./tabs/OverviewTab.js";
 import { ReviewTab } from "./tabs/ReviewTab.js";
 import { LogsTab } from "./tabs/LogsTab.js";
 
@@ -10,12 +9,11 @@ interface Props {
 
 export function RunSideCard({ run }: Props) {
   const activePanel = useAppStore((state) => {
-    const allowed = new Set(["overview", "review", "logs"]);
-    return allowed.has(state.activeTab) ? state.activeTab : "overview";
+    const allowed = new Set(["review", "logs"]);
+    return allowed.has(state.activeTab) ? state.activeTab : "review";
   });
 
   const panels = [
-    { key: "overview", label: "Overview" },
     { key: "review", label: "Review" },
     { key: "logs", label: `Logs (${run.logs.length})` },
   ];
@@ -39,7 +37,6 @@ export function RunSideCard({ run }: Props) {
       </div>
 
       <div className="run-sidecard-body">
-        {activePanel === "overview" && <OverviewTab run={run} />}
         {activePanel === "review" && <ReviewTab run={run} />}
         {activePanel === "logs" && <LogsTab run={run} />}
       </div>

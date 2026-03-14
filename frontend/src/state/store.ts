@@ -114,7 +114,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   batchDetails: new Map(),
   selectedBatchId: null,
   selectedRunId: null,
-  activeTab: "overview",
+  activeTab: "review",
   drawerOpen: false,
   modelMenuOpen: false,
   projectFilters: [],
@@ -178,7 +178,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       batches: state.batches.filter((b) => b.id !== batchId),
       batchDetails: newMap,
       ...(state.selectedBatchId === batchId
-        ? { selectedBatchId: null, selectedRunId: null, activeTab: "overview" }
+        ? { selectedBatchId: null, selectedRunId: null, activeTab: "review" }
         : {}),
       ...(state.deleteDialog.batchId === batchId
         ? { deleteDialog: { ...state.deleteDialog, batchId: null } }
@@ -261,7 +261,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const visible = selectVisibleBatches(state);
     const isVisible = visible.some((b) => b.id === state.selectedBatchId);
     if (!isVisible) {
-      set({ selectedBatchId: visible[0]?.id ?? null, selectedRunId: null, activeTab: "overview" });
+      set({ selectedBatchId: visible[0]?.id ?? null, selectedRunId: null, activeTab: "review" });
     }
   },
 }));

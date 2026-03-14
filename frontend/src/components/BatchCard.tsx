@@ -22,7 +22,7 @@ export function BatchCard({ summary }: Props) {
   const projectFolder = getPathLeaf(projectPath);
 
   async function handleClick() {
-    useAppStore.setState({ selectedBatchId: summary.id, selectedRunId: null, activeTab: "overview" });
+    useAppStore.setState({ selectedBatchId: summary.id, selectedRunId: null, activeTab: "review" });
 
     const { batchDetails, setBatchDetail, syncSelectedBatch } = useAppStore.getState();
     if (!batchDetails.has(summary.id)) {

@@ -4,7 +4,7 @@ import { apiCancelBatch } from "../state/api.js";
 import { StatusPill } from "./StatusPill.js";
 import { RunCard } from "./RunCard.js";
 import { RunDetail } from "./RunDetail.js";
-import { ClockIcon, FolderIcon, XIcon, PlayIcon } from "../icons.js";
+import { ClockIcon, FolderIcon, GitIcon, XIcon, PlayIcon } from "../icons.js";
 import { formatDate, formatRelative, formatModeLabel } from "../utils/format.js";
 import { summarizeRunCounts } from "../utils/runStatus.js";
 
@@ -69,7 +69,16 @@ export function BatchDetail() {
           <h2>{batch.title}</h2>
           <div className="batch-detail-meta">
             <span className="meta-item"><ClockIcon /> Created {formatRelative(batch.createdAt)}</span>
-            <span className="meta-item"><FolderIcon /> {batch.config.projectPath}</span>
+            <span
+              className="meta-item meta-item-project-base"
+              title={`${batch.config.projectPath} · Base ref ${baseRef}`}
+            >
+              <FolderIcon />
+              <span className="batch-detail-path">{batch.config.projectPath}</span>
+              <span className="meta-item-separator">·</span>
+              <GitIcon />
+              <span className="mono">{baseRef}</span>
+            </span>
           </div>
         </div>
         <div className="batch-detail-actions">
@@ -82,35 +91,31 @@ export function BatchDetail() {
         </div>
       </div>
 
-      <div className="info-cards">
-        <div className="info-card">
-          <div className="info-card-label">Mode</div>
-          <div className="info-card-value">{formatModeLabel(batch.mode)}</div>
-        </div>
-        <div className="info-card">
-          <div className="info-card-label">Runs</div>
-          <div className="info-card-value">{batch.runs.length} / {batch.config.runCount}</div>
-        </div>
-        <div className="info-card">
-          <div className="info-card-label">Concurrency</div>
-          <div className="info-card-value">{batch.config.concurrency}</div>
-        </div>
-        <div className="info-card">
-          <div className="info-card-label">Base Ref</div>
-          <div className="info-card-value">{baseRef}</div>
-        </div>
-        <div className="info-card">
-          <div className="info-card-label">Started</div>
-          <div className="info-card-value">{formatDate(batch.startedAt)}</div>
-        </div>
-        <div className="info-card">
-          <div className="info-card-label">Completed</div>
-          <div className="info-card-value">{formatDate(batch.completedAt)}</div>
-        </div>
-        <div className="info-card">
-          <div className="info-card-label">Sandbox</div>
-          <div className="info-card-value">{batch.config.sandboxMode}</div>
-        </div>
+      <div className="batch-detail-summary">
+        <span className="meta-item meta-item-summary">
+          <span className="meta-item-prefix">Mode</span>
+          <span className="meta-item-value">{formatModeLabel(batch.mode)}</span>
+        </span>
+        <span className="meta-item meta-item-summary">
+          <span className="meta-item-prefix">Runs</span>
+          <span className="meta-item-value">{batch.runs.length} / {batch.config.runCount}</span>
+        </span>
+        <span className="meta-item meta-item-summary">
+          <span className="meta-item-prefix">Concurrency</span>
+          <span className="meta-item-value">{batch.config.concurrency}</span>
+        </span>
+        <span className="meta-item meta-item-summary">
+          <span className="meta-item-prefix">Started</span>
+          <span className="meta-item-value">{formatDate(batch.startedAt)}</span>
+        </span>
+        <span className="meta-item meta-item-summary">
+          <span className="meta-item-prefix">Completed</span>
+          <span className="meta-item-value">{formatDate(batch.completedAt)}</span>
+        </span>
+        <span className="meta-item meta-item-summary">
+          <span className="meta-item-prefix">Sandbox</span>
+          <span className="meta-item-value">{batch.config.sandboxMode}</span>
+        </span>
       </div>
 
       {batch.error && (

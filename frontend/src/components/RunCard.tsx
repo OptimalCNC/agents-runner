@@ -9,9 +9,10 @@ interface Props {
 export function RunCard({ run }: Props) {
   const selectedRunId = useAppStore((s) => s.selectedRunId);
   const isSelected = run.id === selectedRunId;
+  const reviewSummary = run.review?.statusShort.split("\n")[0].trim();
 
   function handleClick() {
-    useAppStore.setState({ selectedRunId: run.id, activeTab: "overview" });
+    useAppStore.setState({ selectedRunId: run.id, activeTab: "review" });
   }
 
   return (
@@ -24,13 +25,11 @@ export function RunCard({ run }: Props) {
         <div className="run-card-title">{run.title}</div>
         <StatusPill status={run.status} />
       </div>
-      <div className="run-card-meta">Run {run.index + 1}</div>
-      <div className="tag-row">
-        {run.threadId && <span className="tag">Thread {run.threadId}</span>}
-        {run.review?.statusShort && (
-          <span className="tag">{run.review.statusShort.split("\n")[0]}</span>
-        )}
-      </div>
+      {reviewSummary && (
+        <div className="tag-row">
+          <span className="tag">{reviewSummary}</span>
+        </div>
+      )}
     </div>
   );
 }
