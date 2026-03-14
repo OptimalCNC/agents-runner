@@ -93,3 +93,13 @@ export async function apiGetRunReview(batchId: string, runId: string): Promise<{
     `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/review`,
   );
 }
+
+export async function apiContinueRun(batchId: string, runId: string, prompt: string): Promise<{ batch: Batch }> {
+  return fetchJson<{ batch: Batch }>(
+    `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/continue`,
+    {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    },
+  );
+}

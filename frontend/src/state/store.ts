@@ -39,6 +39,27 @@ export interface Toast {
   message?: string;
 }
 
+function buildBatchSummary(batch: Batch): BatchSummary {
+  return {
+    id: batch.id,
+    mode: normalizeMode(batch.mode),
+    title: batch.title,
+    status: batch.status,
+    createdAt: batch.createdAt,
+    startedAt: batch.startedAt,
+    completedAt: batch.completedAt,
+    cancelRequested: batch.cancelRequested,
+    totalRuns: batch.runs.length,
+    completedRuns: batch.runs.filter((r) => r.status === "completed").length,
+    failedRuns: batch.runs.filter((r) => r.status === "failed").length,
+    cancelledRuns: batch.runs.filter((r) => r.status === "cancelled").length,
+    runningRuns: batch.runs.filter((r) => r.status === "running").length,
+    queuedRuns: batch.runs.filter((r) => r.status === "queued").length,
+    config: batch.config,
+    generation: batch.generation,
+  };
+}
+
 interface AppState {
   connectionStatus: ConnectionStatus;
   config: AppConfig | null;
@@ -63,6 +84,8 @@ interface AppState {
   upsertBatchSummary: (summary: BatchSummary) => void;
   removeBatchFromState: (batchId: string) => void;
   setBatchDetail: (batch: Batch) => void;
+  mergeBatchMeta: (batchId: string, batch: Omit<Batch, "runs">) => void;
+  upsertRunInBatch: (batchId: string, run: Batch["runs"][number], summary?: BatchSummary) => void;
   normalizeProjectFilters: () => ReturnType<typeof getProjectFilterOptions>;
   syncSelectedBatch: () => void;
 }
@@ -186,24 +209,53 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newMap = new Map(batchDetails);
     newMap.set(batch.id, batch);
     set({ batchDetails: newMap });
-    upsertBatchSummary({
-      id: batch.id,
-      mode: normalizeMode(batch.mode),
-      title: batch.title,
-      status: batch.status,
-      createdAt: batch.createdAt,
-      startedAt: batch.startedAt,
-      completedAt: batch.completedAt,
-      cancelRequested: batch.cancelRequested,
-      totalRuns: batch.runs.length,
-      completedRuns: batch.runs.filter((r) => r.status === "completed").length,
-      failedRuns: batch.runs.filter((r) => r.status === "failed").length,
-      cancelledRuns: batch.runs.filter((r) => r.status === "cancelled").length,
-      runningRuns: batch.runs.filter((r) => r.status === "running").length,
-      queuedRuns: batch.runs.filter((r) => r.status === "queued").length,
-      config: batch.config,
-      generation: batch.generation,
-    });
+    upsertBatchSummary(buildBatchSummary(batch));
+  },
+
+  mergeBatchMeta: (batchId, batchMeta) => {
+    const { batchDetails, upsertBatchSummary } = get();
+    const existing = batchDetails.get(batchId);
+    if (!existing) {
+      return;
+    }
+
+    const merged: Batch = {
+      ...existing,
+      ...batchMeta,
+      runs: existing.runs,
+    };
+
+    const newMap = new Map(batchDetails);
+    newMap.set(batchId, merged);
+    set({ batchDetails: newMap });
+    upsertBatchSummary(buildBatchSummary(merged));
+  },
+
+  upsertRunInBatch: (batchId, run, summary) => {
+    const { batchDetails, upsertBatchSummary } = get();
+    const existing = batchDetails.get(batchId);
+
+    if (!existing) {
+      if (summary) {
+        upsertBatchSummary(summary);
+      }
+      return;
+    }
+
+    const runIndex = existing.runs.findIndex((entry) => entry.id === run.id);
+    const nextRuns = runIndex >= 0
+      ? existing.runs.map((entry) => (entry.id === run.id ? run : entry))
+      : [...existing.runs, run].sort((left, right) => left.index - right.index);
+
+    const merged: Batch = {
+      ...existing,
+      runs: nextRuns,
+    };
+
+    const newMap = new Map(batchDetails);
+    newMap.set(batchId, merged);
+    set({ batchDetails: newMap });
+    upsertBatchSummary(summary ?? buildBatchSummary(merged));
   },
 
   normalizeProjectFilters: () => {

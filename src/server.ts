@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createCodexModelCatalog, validateCodexAuth } from "./lib/codexModels";
 import { collectWorktreeReview, inspectProject, listDirectories } from "./lib/git";
 import { createBatchStore } from "./lib/batchStore";
-import { cancelBatch, deleteBatch, generateBatchTitle, executeBatch, previewBatchDelete } from "./lib/runner";
+import { cancelBatch, continueRun, deleteBatch, generateBatchTitle, executeBatch, previewBatchDelete } from "./lib/runner";
 
 import type { BatchMode, CodexAuthValidationResponse, CodexCredentialSource } from "./types";
 
@@ -197,6 +197,15 @@ function normalizeDeleteBatchPayload(body: Record<string, unknown>): { removeWor
   return {
     removeWorktrees: Boolean(body.removeWorktrees),
   };
+}
+
+function normalizeContinueRunPayload(body: Record<string, unknown>): { prompt: string } {
+  const prompt = normalizeString(body.prompt);
+  if (!prompt) {
+    throw new Error("Prompt is required.");
+  }
+
+  return { prompt };
 }
 
 async function serveStaticFile(response: ServerResponse, pathname: string): Promise<void> {
@@ -415,6 +424,31 @@ async function handleApi(request: IncomingMessage, response: ServerResponse, url
       return;
     }
     sendJson(response, 202, { batch });
+    return;
+  }
+
+  const continueRunMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/runs\/([^/]+)\/continue$/);
+  if (request.method === "POST" && continueRunMatch) {
+    const body = await readBody(request);
+    const payload = normalizeContinueRunPayload(body);
+
+    try {
+      const batch = await continueRun(
+        store,
+        decodeURIComponent(continueRunMatch[1]),
+        decodeURIComponent(continueRunMatch[2]),
+        payload.prompt,
+      );
+
+      if (!batch) {
+        sendError(response, 404, "Batch not found.");
+        return;
+      }
+
+      sendJson(response, 202, { batch });
+    } catch (error) {
+      sendError(response, 409, (error as Error).message || "Failed to continue run.");
+    }
     return;
   }
 

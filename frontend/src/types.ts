@@ -65,6 +65,20 @@ export interface RunUsage {
   [key: string]: unknown;
 }
 
+export interface RunTurn {
+  id: string;
+  index: number;
+  prompt: string;
+  status: RunStatus;
+  submittedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  finalResponse: string;
+  error: string | null;
+  usage: RunUsage | null;
+  items: StreamItem[];
+}
+
 export interface FileChange {
   path: string;
   kind?: string;
@@ -175,6 +189,7 @@ export interface Run {
   error: string | null;
   usage: RunUsage | null;
   logs: RunLog[];
+  turns: RunTurn[];
   items: StreamItem[];
   review: RunReview | null;
 }

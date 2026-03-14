@@ -30,10 +30,10 @@ export function connectEvents() {
   });
 
   es.addEventListener("batch.updated", (event: MessageEvent) => {
-    const payload = JSON.parse(event.data) as { summary: BatchSummary; batch: Batch };
-    const { upsertBatchSummary, setBatchDetail, syncSelectedBatch } = useAppStore.getState();
+    const payload = JSON.parse(event.data) as { summary: BatchSummary; batch: Omit<Batch, "runs"> };
+    const { upsertBatchSummary, mergeBatchMeta, syncSelectedBatch } = useAppStore.getState();
     upsertBatchSummary(payload.summary);
-    setBatchDetail(payload.batch);
+    mergeBatchMeta(payload.summary.id, payload.batch);
 
     const state = useAppStore.getState();
     if (!state.selectedBatchId) {
@@ -42,6 +42,13 @@ export function connectEvents() {
         useAppStore.setState({ selectedBatchId: visible[0].id });
       }
     }
+    syncSelectedBatch();
+  });
+
+  es.addEventListener("run.updated", (event: MessageEvent) => {
+    const payload = JSON.parse(event.data) as { batchId: string; summary: BatchSummary; run: Batch["runs"][number] };
+    const { upsertRunInBatch, syncSelectedBatch } = useAppStore.getState();
+    upsertRunInBatch(payload.batchId, payload.run, payload.summary);
     syncSelectedBatch();
   });
 

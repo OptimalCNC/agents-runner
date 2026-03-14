@@ -177,6 +177,10 @@ export function ChevronDownIcon({ size }: IconProps) {
   return <Icon size={size}><polyline points="6 9 12 15 18 9" /></Icon>;
 }
 
+export function ChevronRightIcon({ size }: IconProps) {
+  return <Icon size={size}><polyline points="9 6 15 12 9 18" /></Icon>;
+}
+
 export function ChevronLeftIcon({ size }: IconProps) {
   return <Icon size={size}><polyline points="15 18 9 12 15 6" /></Icon>;
 }

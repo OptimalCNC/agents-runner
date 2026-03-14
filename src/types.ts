@@ -88,7 +88,22 @@ export interface RunReview {
 export interface RunUsage {
   input_tokens: number;
   output_tokens: number;
+  total_tokens?: number;
   [key: string]: unknown;
+}
+
+export interface RunTurn {
+  id: string;
+  index: number;
+  prompt: string;
+  status: RunStatus;
+  submittedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  finalResponse: string;
+  error: string | null;
+  usage: RunUsage | null;
+  items: StreamItem[];
 }
 
 export interface Run {
@@ -107,6 +122,7 @@ export interface Run {
   error: string | null;
   usage: RunUsage | null;
   logs: RunLog[];
+  turns: RunTurn[];
   items: StreamItem[];
   review: RunReview | null;
 }
@@ -115,11 +131,13 @@ export interface Run {
 
 export interface FileChange {
   path: string;
+  kind?: string;
   [key: string]: unknown;
 }
 
 export interface TodoItem {
   completed: boolean;
+  text?: string;
   [key: string]: unknown;
 }
 
@@ -132,6 +150,7 @@ export interface CommandExecutionItem extends BaseStreamItem {
   type: "command_execution";
   command: string;
   status: string;
+  exit_code?: number;
   aggregated_output?: string;
 }
 
@@ -161,7 +180,9 @@ export interface McpToolCallItem extends BaseStreamItem {
   server: string;
   tool: string;
   status: string;
+  arguments?: unknown;
   result?: unknown;
+  error?: { message?: string } | string;
 }
 
 export interface WebSearchItem extends BaseStreamItem {

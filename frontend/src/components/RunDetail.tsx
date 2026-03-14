@@ -1,18 +1,15 @@
 import type { Run } from "../types.js";
 import { useAppStore } from "../state/store.js";
 import { StatusPill } from "./StatusPill.js";
-import { OverviewTab } from "./tabs/OverviewTab.js";
-import { ResponseTab } from "./tabs/ResponseTab.js";
-import { ReviewTab } from "./tabs/ReviewTab.js";
-import { HistoryTab } from "./tabs/HistoryTab.js";
-import { LogsTab } from "./tabs/LogsTab.js";
+import { TranscriptPanel } from "./TranscriptPanel.js";
+import { RunSideCard } from "./RunSideCard.js";
 
 interface Props {
   run: Run | null;
 }
 
 export function RunDetail({ run }: Props) {
-  const activeTabRaw = useAppStore((s) => s.activeTab);
+  const selectedBatchId = useAppStore((state) => state.selectedBatchId);
 
   if (!run) {
     return (
@@ -33,42 +30,27 @@ export function RunDetail({ run }: Props) {
     );
   }
 
-  const tab = activeTabRaw === "items" ? "history" : (activeTabRaw || "overview");
-
-  const tabs = [
-    { key: "overview", label: "Overview" },
-    { key: "response", label: "Response" },
-    { key: "review", label: "Review" },
-    { key: "history", label: `History (${run.items.length})` },
-    { key: "logs", label: `Logs (${run.logs.length})` },
-  ];
-
   return (
     <div className="run-detail">
       <div className="run-detail-header">
-        <div className="run-detail-title">{run.title}</div>
+        <div>
+          <div className="run-detail-title">{run.title}</div>
+          <div className="run-detail-subtitle">
+            {run.turns.length} {run.turns.length === 1 ? "turn" : "turns"}
+            {run.threadId ? ` · ${run.threadId}` : ""}
+          </div>
+        </div>
         <div className="run-detail-header-actions">
           <StatusPill status={run.status} />
         </div>
       </div>
-      <div className="tab-bar">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            className={`tab-btn${tab === t.key ? " is-active" : ""}`}
-            data-tab-key={t.key}
-            type="button"
-            onClick={() => { useAppStore.setState({ activeTab: t.key }); }}
-          >
-            {t.label}
-          </button>
-        ))}
+
+      <div className="run-detail-layout">
+        {selectedBatchId && (
+          <TranscriptPanel batchId={selectedBatchId} run={run} />
+        )}
+        <RunSideCard run={run} />
       </div>
-      {tab === "overview" && <OverviewTab run={run} />}
-      {tab === "response" && <ResponseTab run={run} />}
-      {tab === "review" && <ReviewTab run={run} />}
-      {tab === "history" && <HistoryTab run={run} />}
-      {tab === "logs" && <LogsTab run={run} />}
     </div>
   );
 }

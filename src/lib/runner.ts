@@ -20,6 +20,8 @@ import type {
   ProjectContext,
   Run,
   RunLog,
+  RunTurn,
+  RunUsage,
   StreamItem,
   WorktreeRemovalResult,
 } from "../types";
@@ -94,14 +96,14 @@ function sanitizeItem(item: unknown): StreamItem {
   return clone as unknown as StreamItem;
 }
 
-function upsertItem(run: Run, item: unknown): void {
+function upsertItemList(items: StreamItem[], item: unknown): void {
   const nextItem = sanitizeItem(item);
-  const existingIndex = run.items.findIndex((entry) => entry.id === nextItem.id);
+  const existingIndex = items.findIndex((entry) => entry.id === nextItem.id);
 
   if (existingIndex >= 0) {
-    run.items[existingIndex] = nextItem;
+    items[existingIndex] = nextItem;
   } else {
-    run.items.push(nextItem);
+    items.push(nextItem);
   }
 }
 
@@ -165,6 +167,86 @@ function abortBatchExecution(batchId: string): void {
 
 function getBatchWorktreeRuns(batch: Batch): Run[] {
   return batch.runs.filter((run) => Boolean(run.worktreePath));
+}
+
+function createTurnId(runIndex: number, turnIndex: number): string {
+  return `turn-${runIndex + 1}-${turnIndex + 1}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildRunTurn(prompt: string, runIndex: number, turnIndex: number): RunTurn {
+  return {
+    id: createTurnId(runIndex, turnIndex),
+    index: turnIndex,
+    prompt,
+    status: "queued",
+    submittedAt: nowIso(),
+    startedAt: null,
+    completedAt: null,
+    finalResponse: "",
+    error: null,
+    usage: null,
+    items: [],
+  };
+}
+
+function getRunTurn(run: Run, turnId: string): RunTurn | null {
+  return run.turns.find((turn) => turn.id === turnId) ?? null;
+}
+
+function getLatestRunTurn(run: Run): RunTurn | null {
+  return run.turns.at(-1) ?? null;
+}
+
+function buildFlattenedItems(turns: RunTurn[]): StreamItem[] {
+  return turns.flatMap((turn) =>
+    turn.items.map((item) => ({
+      ...item,
+      id: `${turn.id}:${item.id}`,
+    })) as StreamItem[],
+  );
+}
+
+function mergeUsage(left: RunUsage | null, right: RunUsage | null): RunUsage | null {
+  if (!left && !right) {
+    return null;
+  }
+
+  return {
+    input_tokens: Number(left?.input_tokens ?? 0) + Number(right?.input_tokens ?? 0),
+    output_tokens: Number(left?.output_tokens ?? 0) + Number(right?.output_tokens ?? 0),
+    total_tokens:
+      (left?.total_tokens != null || right?.total_tokens != null)
+        ? Number(left?.total_tokens ?? 0) + Number(right?.total_tokens ?? 0)
+        : undefined,
+  };
+}
+
+function aggregateRunUsage(turns: RunTurn[]): RunUsage | null {
+  return turns.reduce<RunUsage | null>((acc, turn) => mergeUsage(acc, turn.usage), null);
+}
+
+function getLatestTurnResponse(turns: RunTurn[]): string {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (turns[index].finalResponse) {
+      return turns[index].finalResponse;
+    }
+  }
+  return "";
+}
+
+function syncRunDerivedState(run: Run): void {
+  const latestTurn = getLatestRunTurn(run);
+  run.status = latestTurn?.status ?? run.status;
+  run.completedAt = latestTurn?.completedAt ?? null;
+  run.error = latestTurn?.error ?? null;
+  run.finalResponse = getLatestTurnResponse(run.turns);
+  run.usage = aggregateRunUsage(run.turns);
+  run.items = buildFlattenedItems(run.turns);
+
+  const firstStartedAt = run.turns.find((turn) => turn.startedAt)?.startedAt ?? null;
+  if (firstStartedAt) {
+    run.startedAt = firstStartedAt;
+  }
 }
 
 interface WorktreePreviewEntry {
@@ -313,6 +395,7 @@ function buildRunRecord(task: GenerationTask, index: number): Run {
     error: null,
     usage: null,
     logs: [],
+    turns: [buildRunTurn(task.prompt, index, 0)],
     items: [],
     review: null,
   };
@@ -570,9 +653,119 @@ export async function generateBatchTitle(store: BatchStore, batchId: string): Pr
   }
 }
 
+async function streamTurnEvents(
+  store: BatchStore,
+  batchId: string,
+  runId: string,
+  turnId: string,
+  events: AsyncIterable<unknown>,
+): Promise<void> {
+  for await (const event of events) {
+    store.updateRun(batchId, runId, (run) => {
+      const turn = getRunTurn(run, turnId);
+      if (!turn) {
+        return;
+      }
+
+      const evt = event as Record<string, unknown>;
+      switch (evt.type) {
+        case "thread.started": {
+          const threadId = (evt.thread_id ?? evt.id) as string | undefined;
+          if (threadId) {
+            run.threadId = threadId;
+            appendLog(run, "info", `Thread started: ${threadId}`);
+          }
+          break;
+        }
+        case "turn.started":
+          turn.status = "running";
+          turn.startedAt ||= nowIso();
+          appendLog(run, "info", "Codex turn started.");
+          break;
+        case "turn.completed":
+          turn.usage = evt.usage as Run["usage"];
+          appendLog(run, "info", evt.usage
+            ? `Turn completed. Tokens in/out: ${(evt.usage as Record<string, unknown>).input_tokens}/${(evt.usage as Record<string, unknown>).output_tokens}.`
+            : "Turn completed.");
+          break;
+        case "turn.failed":
+          turn.status = "failed";
+          turn.error = (evt.error as Record<string, unknown>).message as string;
+          appendLog(run, "error", turn.error);
+          break;
+        case "item.started":
+          upsertItemList(turn.items, evt.item);
+          appendLog(run, "info", describeItem(evt.item as Record<string, unknown>));
+          break;
+        case "item.updated":
+          upsertItemList(turn.items, evt.item);
+          break;
+        case "item.completed":
+          upsertItemList(turn.items, evt.item);
+          if ((evt.item as Record<string, unknown>).type === "agent_message") {
+            turn.finalResponse = truncateText((evt.item as Record<string, unknown>).text ?? "");
+          }
+          if ((evt.item as Record<string, unknown>).type === "error") {
+            turn.error = (evt.item as Record<string, unknown>).message as string;
+          }
+          appendLog(run, "info", describeItem(evt.item as Record<string, unknown>));
+          break;
+        case "error":
+          turn.status = "failed";
+          turn.error = evt.message as string;
+          appendLog(run, "error", turn.error);
+          break;
+        default:
+          break;
+      }
+
+      syncRunDerivedState(run);
+    });
+  }
+}
+
+function releaseRunExecution(store: BatchStore, batchId: string, runId: string, execution: ExecutionState): void {
+  execution.runControllers.delete(runId);
+
+  store.updateBatch(batchId, (mutableBatch) => {
+    mutableBatch.status = deriveBatchStatus(mutableBatch);
+    mutableBatch.completedAt =
+      mutableBatch.status === "running" || mutableBatch.status === "queued"
+        ? null
+        : nowIso();
+  });
+
+  maybeClearExecutionState(batchId, execution);
+}
+
+async function refreshRunReview(
+  store: BatchStore,
+  batchId: string,
+  runId: string,
+  worktreePath: string | null,
+): Promise<void> {
+  if (!worktreePath) {
+    return;
+  }
+
+  const review = await collectWorktreeReview(worktreePath).catch(() => null);
+  if (!review) {
+    return;
+  }
+
+  store.updateRun(batchId, runId, (run) => {
+    run.review = review;
+  });
+}
+
 async function executeRun(store: BatchStore, batchId: string, runId: string, projectContext: ProjectContext): Promise<void> {
   const batch = store.getBatch(batchId)!;
   const runSnapshot = batch.runs.find((entry) => entry.id === runId)!;
+  const initialTurnId = runSnapshot.turns[0]?.id;
+  if (!initialTurnId) {
+    throw new Error("Run is missing its initial transcript turn.");
+  }
+
   const execution = getExecutionState(batchId);
   const controller = new AbortController();
   execution.runControllers.set(runId, controller);
@@ -580,9 +773,20 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
   let worktreePath: string | null = null;
 
   store.updateRun(batchId, runId, (run) => {
+    const turn = getRunTurn(run, initialTurnId);
+    if (!turn) {
+      return;
+    }
+
     run.status = "running";
-    run.startedAt = nowIso();
+    run.completedAt = null;
+    run.error = null;
+    turn.status = "running";
+    turn.startedAt ||= nowIso();
+    turn.completedAt = null;
+    turn.error = null;
     appendLog(run, "info", "Preparing git worktree.");
+    syncRunDerivedState(run);
   });
 
   try {
@@ -607,6 +811,7 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
       run.worktreePath = worktreePath;
       run.workingDirectory = workingDirectory;
       run.baseRef = baseRef;
+      run.review = null;
       appendLog(run, "info", `Worktree ready at ${worktreePath}.`);
     });
 
@@ -626,79 +831,47 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
       signal: controller.signal,
     });
 
-    for await (const event of events) {
-      store.updateRun(batchId, runId, (run) => {
-        const evt = event as Record<string, unknown>;
-        switch (evt.type) {
-          case "thread.started":
-            run.threadId = evt.thread_id as string;
-            appendLog(run, "info", `Thread started: ${evt.thread_id}`);
-            break;
-          case "turn.started":
-            appendLog(run, "info", "Codex turn started.");
-            break;
-          case "turn.completed":
-            run.usage = evt.usage as Run["usage"];
-            appendLog(run, "info", evt.usage
-              ? `Turn completed. Tokens in/out: ${(evt.usage as Record<string, unknown>).input_tokens}/${(evt.usage as Record<string, unknown>).output_tokens}.`
-              : "Turn completed.");
-            break;
-          case "turn.failed":
-            run.error = (evt.error as Record<string, unknown>).message as string;
-            appendLog(run, "error", (evt.error as Record<string, unknown>).message as string);
-            break;
-          case "item.started":
-            upsertItem(run, evt.item);
-            appendLog(run, "info", describeItem(evt.item as Record<string, unknown>));
-            break;
-          case "item.updated":
-            upsertItem(run, evt.item);
-            break;
-          case "item.completed":
-            upsertItem(run, evt.item);
-            if ((evt.item as Record<string, unknown>).type === "agent_message") {
-              run.finalResponse = truncateText((evt.item as Record<string, unknown>).text ?? "");
-            }
-            if ((evt.item as Record<string, unknown>).type === "error") {
-              run.error = (evt.item as Record<string, unknown>).message as string;
-            }
-            appendLog(run, "info", describeItem(evt.item as Record<string, unknown>));
-            break;
-          case "error":
-            run.error = evt.message as string;
-            appendLog(run, "error", evt.message as string);
-            break;
-          default:
-            break;
-        }
-      });
-    }
-
-    const review = worktreePath ? await collectWorktreeReview(worktreePath) : null;
+    await streamTurnEvents(store, batchId, runId, initialTurnId, events);
 
     store.updateRun(batchId, runId, (run) => {
-      run.status = run.error ? "failed" : "completed";
-      run.completedAt = nowIso();
-      run.review = review;
+      const turn = getRunTurn(run, initialTurnId);
+      if (!turn) {
+        return;
+      }
 
-      if (!run.error) {
+      turn.status = turn.error ? "failed" : "completed";
+      turn.completedAt ||= nowIso();
+      if (!turn.error) {
         appendLog(run, "info", "Run completed.");
       }
+      syncRunDerivedState(run);
     });
+
+    releaseRunExecution(store, batchId, runId, execution);
+    void refreshRunReview(store, batchId, runId, worktreePath);
+    return;
   } catch (error) {
     const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
-    const review = worktreePath ? await collectWorktreeReview(worktreePath).catch(() => null) : null;
 
     store.updateRun(batchId, runId, (run) => {
-      run.status = cancelled ? "cancelled" : "failed";
-      run.completedAt = nowIso();
-      run.error = cancelled ? "Batch cancelled." : (error as Error).message;
-      run.review = review ?? run.review;
-      appendLog(run, cancelled ? "warning" : "error", run.error!);
+      const turn = getRunTurn(run, initialTurnId);
+      if (!turn) {
+        return;
+      }
+
+      turn.status = cancelled ? "cancelled" : "failed";
+      turn.completedAt = nowIso();
+      turn.error = cancelled ? "Batch cancelled." : (error as Error).message;
+      appendLog(run, cancelled ? "warning" : "error", turn.error);
+      syncRunDerivedState(run);
     });
+    releaseRunExecution(store, batchId, runId, execution);
+    void refreshRunReview(store, batchId, runId, worktreePath);
+    return;
   } finally {
-    execution.runControllers.delete(runId);
-    maybeClearExecutionState(batchId, execution);
+    if (execution.runControllers.has(runId)) {
+      releaseRunExecution(store, batchId, runId, execution);
+    }
   }
 }
 
@@ -796,6 +969,124 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
     execution.runControllers.clear();
     maybeClearExecutionState(batchId, execution);
   }
+}
+
+export async function continueRun(store: BatchStore, batchId: string, runId: string, prompt: string): Promise<Batch | null> {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
+  }
+
+  if (batch.cancelRequested) {
+    throw new Error("This batch has been cancelled and cannot accept new turns.");
+  }
+
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  if (!runSnapshot) {
+    throw new Error("Run not found.");
+  }
+
+  if (!runSnapshot.threadId) {
+    throw new Error("This run does not have a resumable Codex thread yet.");
+  }
+
+  if (!runSnapshot.workingDirectory) {
+    throw new Error("This run does not have a working directory yet.");
+  }
+
+  const threadId = runSnapshot.threadId;
+  const workingDirectory = runSnapshot.workingDirectory;
+  const worktreePath = runSnapshot.worktreePath;
+
+  const execution = getExecutionState(batchId);
+  if (execution.runControllers.has(runId)) {
+    throw new Error("This run is already active.");
+  }
+
+  const nextTurn = buildRunTurn(prompt, runSnapshot.index, runSnapshot.turns.length);
+  const controller = new AbortController();
+  execution.runControllers.set(runId, controller);
+
+  store.updateRun(batchId, runId, (run) => {
+    run.turns.push(nextTurn);
+    run.status = "running";
+    run.completedAt = null;
+    run.error = null;
+    run.review = null;
+    appendLog(run, "info", `Continuing Codex thread ${run.threadId}.`);
+    syncRunDerivedState(run);
+  });
+
+  store.updateBatch(batchId, (mutableBatch) => {
+    mutableBatch.status = "running";
+    mutableBatch.completedAt = null;
+    mutableBatch.error = null;
+  });
+
+  void (async () => {
+    try {
+      const codex = getCodexClient();
+      const thread = codex.resumeThread(threadId, {
+        model: batch.config.model || undefined,
+        sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
+        approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
+        workingDirectory,
+        networkAccessEnabled: batch.config.networkAccessEnabled,
+        webSearchEnabled: batch.config.webSearchMode !== "disabled",
+        webSearchMode: batch.config.webSearchMode as "disabled" | "live",
+        modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
+      });
+
+      const { events } = await thread.runStreamed(prompt, {
+        signal: controller.signal,
+      });
+
+      await streamTurnEvents(store, batchId, runId, nextTurn.id, events);
+
+      store.updateRun(batchId, runId, (run) => {
+        const turn = getRunTurn(run, nextTurn.id);
+        if (!turn) {
+          return;
+        }
+
+        turn.status = turn.error ? "failed" : "completed";
+        turn.completedAt ||= nowIso();
+        if (!turn.error) {
+          appendLog(run, "info", "Follow-up turn completed.");
+        }
+        syncRunDerivedState(run);
+      });
+
+      releaseRunExecution(store, batchId, runId, execution);
+      void refreshRunReview(store, batchId, runId, worktreePath);
+      return;
+    } catch (error) {
+      const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
+
+      store.updateRun(batchId, runId, (run) => {
+        const turn = getRunTurn(run, nextTurn.id);
+        if (!turn) {
+          return;
+        }
+
+        turn.status = cancelled ? "cancelled" : "failed";
+        turn.completedAt = nowIso();
+        turn.error = cancelled ? "Batch cancelled." : (error as Error).message;
+        appendLog(run, cancelled ? "warning" : "error", turn.error);
+        syncRunDerivedState(run);
+      });
+
+      releaseRunExecution(store, batchId, runId, execution);
+      void refreshRunReview(store, batchId, runId, worktreePath);
+      return;
+    } finally {
+      if (execution.runControllers.has(runId)) {
+        releaseRunExecution(store, batchId, runId, execution);
+      }
+    }
+  })();
+
+  return store.getBatch(batchId);
 }
 
 export function cancelBatch(store: BatchStore, batchId: string): Batch | null {

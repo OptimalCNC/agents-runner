@@ -33,6 +33,40 @@ function normalizeMode(value: string | undefined): BatchMode {
   return value === "generated" || value === "task-generator" ? "generated" : "repeated";
 }
 
+function buildBatchMeta(batch: Batch): Omit<Batch, "runs"> {
+  const { runs, ...batchMeta } = clone(batch);
+  return batchMeta;
+}
+
+function normalizeLoadedRun(run: Run): Run {
+  const nextRun = clone(run);
+
+  if (!Array.isArray(nextRun.turns) || nextRun.turns.length === 0) {
+    nextRun.turns = [{
+      id: `turn-legacy-${nextRun.id}`,
+      index: 0,
+      prompt: nextRun.prompt,
+      status: nextRun.status,
+      submittedAt: nextRun.startedAt || nextRun.completedAt || new Date().toISOString(),
+      startedAt: nextRun.startedAt,
+      completedAt: nextRun.completedAt,
+      finalResponse: nextRun.finalResponse,
+      error: nextRun.error,
+      usage: nextRun.usage,
+      items: Array.isArray(nextRun.items) ? nextRun.items : [],
+    }];
+  }
+
+  nextRun.items = nextRun.turns.flatMap((turn) =>
+    (turn.items || []).map((item) => ({
+      ...item,
+      id: `${turn.id}:${item.id}`,
+    })),
+  );
+
+  return nextRun;
+}
+
 function buildSummary(batch: Batch): BatchSummary {
   const completedRuns = batch.runs.filter((run) => run.status === "completed").length;
   const failedRuns = batch.runs.filter((run) => run.status === "failed").length;
@@ -170,13 +204,28 @@ export function createBatchStore(dataDirectory: string): BatchStore {
         continue;
       }
 
-      const payload = {
-        summary: buildSummary(batch),
-        batch: clone(batch),
+      const summary = buildSummary(batch);
+      const batchPayload = {
+        summary,
+        batch: buildBatchMeta(batch),
       };
+      const dirtyRunIds = Array.from(dirtyRuns.get(batchId) ?? []);
 
       for (const response of subscribers) {
-        writeSse(response, "batch.updated", payload);
+        writeSse(response, "batch.updated", batchPayload);
+
+        for (const runId of dirtyRunIds) {
+          const run = batch.runs.find((entry) => entry.id === runId);
+          if (!run) {
+            continue;
+          }
+
+          writeSse(response, "run.updated", {
+            batchId,
+            summary,
+            run: clone(run),
+          });
+        }
       }
     }
   }
@@ -304,7 +353,7 @@ export function createBatchStore(dataDirectory: string): BatchStore {
           }
           try {
             const run = JSON.parse(await fs.readFile(path.join(rDir, runFile), "utf8")) as Run;
-            runs.push(run);
+            runs.push(normalizeLoadedRun(run));
           } catch {
             continue;
           }
