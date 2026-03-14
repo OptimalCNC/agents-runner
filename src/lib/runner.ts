@@ -767,7 +767,7 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
   const runSnapshot = batch.runs.find((entry) => entry.id === runId)!;
   const initialTurnId = runSnapshot.turns[0]?.id;
   if (!initialTurnId) {
-    throw new Error("Run is missing its initial transcript turn.");
+    throw new Error("Run is missing its initial session turn.");
   }
 
   const execution = getExecutionState(batchId);

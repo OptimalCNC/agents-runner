@@ -52,7 +52,7 @@ Agents Runner uses the Codex SDK, which needs credentials to talk to a model pro
 1. **Pick a project** &mdash; select any git repository (or a subdirectory within one). The app validates it and detects the branch and HEAD commit.
 2. **Configure the batch** &mdash; choose a mode, set the number of runs and concurrency, write your prompt, and optionally tune model and sandbox settings.
 3. **Start** &mdash; the app creates isolated git worktrees and launches runs in parallel. Progress streams back in real time.
-4. **Review and continue** &mdash; inspect each run in the coding-agent workspace, including transcript, streamed activity, git changes, and logs, then continue the same Codex thread with follow-up messages when needed.
+4. **Review and continue** &mdash; inspect each run in the coding-agent workspace, including session activity, streamed activity, git changes, and logs, then continue the same Codex thread with follow-up messages when needed.
 
 ## Configuration
 

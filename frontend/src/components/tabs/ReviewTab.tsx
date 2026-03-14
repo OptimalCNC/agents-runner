@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { DiffModeEnum, DiffView } from "@git-diff-view/react";
+import "@git-diff-view/react/styles/diff-view-pure.css";
 import type { Run } from "../../types.js";
 import { useAppStore, selectSelectedBatch } from "../../state/store.js";
 import { apiGetRunReview } from "../../state/api.js";
 import { RefreshIcon } from "../../icons.js";
+import { splitDiff } from "../../utils/diffSplitter.js";
 
 interface Props {
   run: Run;
@@ -37,10 +40,17 @@ export function ReviewTab({ run }: Props) {
   }
 
   const review = run.review;
+  const files = useMemo(() => splitDiff(review?.trackedDiff), [review?.trackedDiff]);
+  const totals = useMemo(() => {
+    return files.reduce((acc, file) => ({
+      additions: acc.additions + file.additions,
+      deletions: acc.deletions + file.deletions,
+    }), { additions: 0, deletions: 0 });
+  }, [files]);
 
   return (
-    <div className="tab-panel is-active" data-tab="review">
-      <div className="tab-panel-toolbar">
+    <div className="tab-panel tab-panel-review is-active" data-tab="review">
+      <div className="review-summary-bar">
         <button
           className="btn btn-ghost btn-sm"
           type="button"
@@ -49,6 +59,13 @@ export function ReviewTab({ run }: Props) {
         >
           <RefreshIcon /> {refreshing ? "Refreshing\u2026" : "Refresh Review"}
         </button>
+        {!!files.length && (
+          <div className="review-summary-stats">
+            <span>{files.length} {files.length === 1 ? "file" : "files"} changed</span>
+            <span className="review-plus">+{totals.additions}</span>
+            <span className="review-minus">-{totals.deletions}</span>
+          </div>
+        )}
       </div>
       {!review ? (
         <div className="text-muted text-sm">
@@ -57,23 +74,63 @@ export function ReviewTab({ run }: Props) {
       ) : (
         <>
           <div className="review-section">
-            <div className="review-section-title">Git Status</div>
-            <pre className="code-block">{review.statusShort || "No tracked changes."}</pre>
-          </div>
-          <div className="review-section">
-            <div className="review-section-title">Diff Stat</div>
-            <pre className="code-block">{review.diffStat || "No diff stat available."}</pre>
-          </div>
-          <div className="review-section">
             <div className="review-section-title">Tracked Diff</div>
-            <pre className="code-block">{review.trackedDiff || "No tracked diff."}</pre>
+            {!files.length ? (
+              <pre className="code-block">{review.trackedDiff || "No tracked diff."}</pre>
+            ) : (
+              <div className="review-file-list">
+                {files.map((file, index) => (
+                  <details key={`${file.fileName}-${index}`} className="review-file-item" open={index === 0}>
+                    <summary className="review-file-summary">
+                      <span className="review-file-name">{file.fileName}</span>
+                      <span className="review-file-meta">
+                        {file.isNew && <span className="review-badge review-badge-new">new</span>}
+                        {file.isDeleted && <span className="review-badge review-badge-del">deleted</span>}
+                        {file.isBinary && <span className="review-badge review-badge-binary">binary</span>}
+                        <span className="review-plus">+{file.additions}</span>
+                        <span className="review-minus">-{file.deletions}</span>
+                      </span>
+                    </summary>
+                    <div className="review-file-diff">
+                      {file.isBinary ? (
+                        <pre className="code-block">{file.patch}</pre>
+                      ) : (
+                        <DiffView
+                          data={{
+                            oldFile: { fileName: file.fileName },
+                            newFile: { fileName: file.fileName },
+                            hunks: [file.patch],
+                          }}
+                          diffViewMode={DiffModeEnum.Unified}
+                          diffViewTheme="dark"
+                          diffViewWrap
+                        />
+                      )}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            )}
           </div>
-          {(review.untrackedFiles || []).map((f, i) => (
-            <div key={i} className="review-section">
-              <div className="review-section-title">Untracked: {f.path}</div>
-              <pre className="code-block">{f.preview}</pre>
+
+          {(review.untrackedFiles || []).length > 0 && (
+            <div className="review-section">
+              <div className="review-section-title">Untracked Files</div>
+              {(review.untrackedFiles || []).map((file, index) => (
+                <details key={`${file.path}-${index}`} className="review-file-item">
+                  <summary className="review-file-summary">
+                    <span className="review-file-name">{file.path}</span>
+                    <span className="review-file-meta">
+                      <span className="review-badge review-badge-new">untracked</span>
+                    </span>
+                  </summary>
+                  <div className="review-file-diff">
+                    <pre className="code-block">{file.preview}</pre>
+                  </div>
+                </details>
+              ))}
             </div>
-          ))}
+          )}
         </>
       )}
     </div>

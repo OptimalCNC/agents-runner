@@ -1,9 +1,20 @@
+import { Suspense, lazy } from "react";
+import { useState } from "react";
 import type { Run } from "../types.js";
 import { useAppStore } from "../state/store.js";
 import { formatDate } from "../utils/format.js";
 import { StatusPill } from "./StatusPill.js";
-import { TranscriptPanel } from "./TranscriptPanel.js";
-import { RunSideCard } from "./RunSideCard.js";
+import { SessionPanel } from "./SessionPanel.js";
+
+const ReviewTab = lazy(async () => {
+  const mod = await import("./tabs/ReviewTab.js");
+  return { default: mod.ReviewTab };
+});
+
+const LogsTab = lazy(async () => {
+  const mod = await import("./tabs/LogsTab.js");
+  return { default: mod.LogsTab };
+});
 
 interface Props {
   run: Run | null;
@@ -27,7 +38,12 @@ function formatUsageSummary(run: Run): string {
 }
 
 export function RunDetail({ run }: Props) {
+  const [logsOpen, setLogsOpen] = useState(false);
   const selectedBatchId = useAppStore((state) => state.selectedBatchId);
+  const activePanel = useAppStore((state) => {
+    const allowed = new Set(["session", "review"]);
+    return allowed.has(state.activeTab) ? state.activeTab : "session";
+  });
 
   if (!run) {
     return (
@@ -50,6 +66,10 @@ export function RunDetail({ run }: Props) {
 
   const directory = run.workingDirectory || run.worktreePath || "Pending";
   const usageSummary = formatUsageSummary(run);
+  const panels = [
+    { key: "session", label: "Session" },
+    { key: "review", label: "Review" },
+  ];
 
   return (
     <div className="run-detail">
@@ -81,18 +101,64 @@ export function RunDetail({ run }: Props) {
           </div>
         </div>
         <div className="run-detail-header-actions">
+          <button
+            className="btn btn-ghost btn-sm"
+            type="button"
+            onClick={() => setLogsOpen(true)}
+          >
+            Logs ({run.logs.length})
+          </button>
           <StatusPill status={run.status} />
         </div>
       </div>
 
       {run.error && <div className="run-detail-alert run-detail-alert-danger">{run.error}</div>}
 
-      <div className="run-detail-layout">
-        {selectedBatchId && (
-          <TranscriptPanel batchId={selectedBatchId} run={run} />
-        )}
-        <RunSideCard run={run} />
+      <div className="run-detail-tabs">
+        {panels.map((panel) => (
+          <button
+            key={panel.key}
+            className={`run-detail-tab${activePanel === panel.key ? " is-active" : ""}`}
+            type="button"
+            onClick={() => useAppStore.setState({ activeTab: panel.key })}
+          >
+            {panel.label}
+          </button>
+        ))}
       </div>
+
+      <div className="run-detail-content">
+        {activePanel === "session" && selectedBatchId && (
+          <SessionPanel batchId={selectedBatchId} run={run} />
+        )}
+        {activePanel === "review" && (
+          <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading review...</div>}>
+            <ReviewTab run={run} />
+          </Suspense>
+        )}
+      </div>
+
+      {logsOpen && (
+        <div
+          className="run-logs-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Run logs"
+          onClick={() => setLogsOpen(false)}
+        >
+          <div className="run-logs-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="run-logs-panel-header">
+              <div className="run-logs-panel-title">Run Logs</div>
+              <button className="btn btn-ghost btn-sm" type="button" onClick={() => setLogsOpen(false)}>
+                Close
+              </button>
+            </div>
+            <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading logs...</div>}>
+              <LogsTab run={run} />
+            </Suspense>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

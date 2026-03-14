@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@git-diff-view/react": "^0.1.2",
     "dompurify": "^3.2.4",
     "marked": "^15.0.11",
     "react": "^19.0.0",

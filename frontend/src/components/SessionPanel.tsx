@@ -14,11 +14,11 @@ interface Props {
   run: Run;
 }
 
-type TranscriptItemEntry =
+type SessionItemEntry =
   | { kind: "item"; item: StreamItem }
   | { kind: "group"; groupKey: string; items: StreamItem[] };
 
-function getTranscriptTurns(run: Run): RunTurn[] {
+function getSessionTurns(run: Run): RunTurn[] {
   if (run.turns.length > 0) {
     return run.turns;
   }
@@ -88,8 +88,8 @@ function getGroupKey(item: StreamItem): string | null {
   return null;
 }
 
-function groupTurnItems(items: StreamItem[]): TranscriptItemEntry[] {
-  const entries: TranscriptItemEntry[] = [];
+function groupTurnItems(items: StreamItem[]): SessionItemEntry[] {
+  const entries: SessionItemEntry[] = [];
 
   for (let index = 0; index < items.length; index += 1) {
     const currentItem = items[index];
@@ -161,12 +161,12 @@ function ToolGroup({ items }: { items: StreamItem[] }) {
   );
 }
 
-export function TranscriptPanel({ batchId, run }: Props) {
+export function SessionPanel({ batchId, run }: Props) {
   const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<RunTurn | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const turns = useMemo(() => getTranscriptTurns(run), [run]);
+  const turns = useMemo(() => getSessionTurns(run), [run]);
   const displayTurns = useMemo(() => {
     if (!submitting || !pendingTurn) {
       return turns;
@@ -219,9 +219,9 @@ export function TranscriptPanel({ batchId, run }: Props) {
   }
 
   return (
-    <section className="transcript-panel">
-      <div ref={scrollRef} className="transcript-scroll">
-        <div className="transcript-thread">
+    <section className="session-panel">
+      <div ref={scrollRef} className="session-scroll">
+        <div className="session-thread">
           {displayTurns.map((turn, index) => (
             <div key={turn.id} className="tx-turn">
               <div className="tx-turn-divider">
@@ -272,10 +272,10 @@ export function TranscriptPanel({ batchId, run }: Props) {
         </div>
       </div>
 
-      <form className="transcript-composer" onSubmit={handleSubmit}>
-        <div className="transcript-composer-shell">
+      <form className="session-composer" onSubmit={handleSubmit}>
+        <div className="session-composer-shell">
           <textarea
-            className="transcript-textarea"
+            className="session-textarea"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             placeholder={
@@ -290,12 +290,12 @@ export function TranscriptPanel({ batchId, run }: Props) {
             rows={4}
             disabled={composerDisabled}
           />
-          <div className="transcript-composer-footer">
-            <div className="transcript-composer-hint">
+          <div className="session-composer-footer">
+            <div className="session-composer-hint">
               {run.workingDirectory || "No working directory yet."}
             </div>
             <button
-              className="btn btn-primary transcript-submit"
+              className="btn btn-primary session-submit"
               type="submit"
               disabled={composerDisabled || !prompt.trim()}
             >
