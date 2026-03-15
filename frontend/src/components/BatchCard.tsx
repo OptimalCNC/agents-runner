@@ -1,6 +1,5 @@
 import type { BatchSummary } from "../types.js";
 import { useAppStore } from "../state/store.js";
-import { apiLoadBatch } from "../state/api.js";
 import { openDeleteBatchDialog } from "../dialogs/DeleteBatchDialog.js";
 import { StatusPill } from "./StatusPill.js";
 import { FolderIcon, XIcon } from "../icons.js";
@@ -21,21 +20,8 @@ export function BatchCard({ summary }: Props) {
   const projectPath = getProjectPath(summary);
   const projectFolder = getPathLeaf(projectPath);
 
-  async function handleClick() {
-    useAppStore.setState({ selectedBatchId: summary.id, selectedRunId: null, activeTab: "session" });
-
-    const { batchDetails, setBatchDetail, syncSelectedBatch } = useAppStore.getState();
-    if (!batchDetails.has(summary.id)) {
-      try {
-        const payload = await apiLoadBatch(summary.id);
-        setBatchDetail(payload.batch);
-        syncSelectedBatch();
-      } catch {
-        // ignore
-      }
-    } else {
-      syncSelectedBatch();
-    }
+  function handleClick() {
+    useAppStore.getState().selectBatch(summary.id);
   }
 
   function handleDelete(e: React.MouseEvent) {

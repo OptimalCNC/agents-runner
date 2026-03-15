@@ -1,9 +1,17 @@
 import { create } from "zustand";
-import type { AppConfig, BatchSummary, Batch, ProjectContext, CodexModel, WorktreeInspection } from "../types.js";
-import { getProjectPath, buildProjectPathOptions } from "../utils/paths.js";
-import { normalizeMode } from "../utils/format.js";
 
-// --- Types ---
+import type { AppConfig, BatchSummary, Batch, ProjectContext, CodexModel, WorktreeInspection } from "../types.js";
+import { normalizeMode } from "../utils/format.js";
+import { buildProjectPathOptions, getProjectPath } from "../utils/paths.js";
+import {
+  type NavigationState,
+  type RunDetailTab,
+  ensureSelectedBatchVisibleInFilters,
+  reconcileNavigationState,
+  saveUiPreferences,
+  syncNavigationSelectionToLocation,
+} from "./navigation.js";
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface BrowserState {
@@ -39,29 +47,6 @@ export interface Toast {
   message?: string;
 }
 
-function buildBatchSummary(batch: Batch): BatchSummary {
-  return {
-    id: batch.id,
-    mode: normalizeMode(batch.mode),
-    title: batch.title,
-    status: batch.status,
-    createdAt: batch.createdAt,
-    startedAt: batch.startedAt,
-    completedAt: batch.completedAt,
-    cancelRequested: batch.cancelRequested,
-    totalRuns: batch.runs.length,
-    completedRuns: batch.runs.filter((r) => r.status === "completed").length,
-    failedRuns: batch.runs.filter((r) => r.status === "failed").length,
-    cancelledRuns: batch.runs.filter((r) => r.status === "cancelled").length,
-    preparingRuns: batch.runs.filter((r) => r.status === "preparing").length,
-    waitingForCodexRuns: batch.runs.filter((r) => r.status === "waiting_for_codex").length,
-    runningRuns: batch.runs.filter((r) => r.status === "running").length,
-    queuedRuns: batch.runs.filter((r) => r.status === "queued").length,
-    config: batch.config,
-    generation: batch.generation,
-  };
-}
-
 interface AppState {
   connectionStatus: ConnectionStatus;
   config: AppConfig | null;
@@ -69,7 +54,7 @@ interface AppState {
   batchDetails: Map<string, Batch>;
   selectedBatchId: string | null;
   selectedRunId: string | null;
-  activeTab: string;
+  activeTab: RunDetailTab;
   drawerOpen: boolean;
   modelMenuOpen: boolean;
   projectFilters: string[];
@@ -88,21 +73,85 @@ interface AppState {
   setBatchDetail: (batch: Batch) => void;
   mergeBatchMeta: (batchId: string, batch: Omit<Batch, "runs">) => void;
   upsertRunInBatch: (batchId: string, run: Batch["runs"][number], summary?: BatchSummary) => void;
-  normalizeProjectFilters: () => ReturnType<typeof getProjectFilterOptions>;
-  syncSelectedBatch: () => void;
+  hydrateNavigationState: (state: Partial<NavigationState>) => void;
+  selectBatch: (batchId: string | null) => void;
+  selectRun: (runId: string | null) => void;
+  selectTab: (tab: RunDetailTab) => void;
+  setProjectFilters: (filters: string[]) => void;
+  reconcileSelection: (options?: { preferSelectedBatchVisible?: boolean }) => void;
+}
+
+function buildBatchSummary(batch: Batch): BatchSummary {
+  return {
+    id: batch.id,
+    mode: normalizeMode(batch.mode),
+    title: batch.title,
+    status: batch.status,
+    createdAt: batch.createdAt,
+    startedAt: batch.startedAt,
+    completedAt: batch.completedAt,
+    cancelRequested: batch.cancelRequested,
+    totalRuns: batch.runs.length,
+    completedRuns: batch.runs.filter((run) => run.status === "completed").length,
+    failedRuns: batch.runs.filter((run) => run.status === "failed").length,
+    cancelledRuns: batch.runs.filter((run) => run.status === "cancelled").length,
+    preparingRuns: batch.runs.filter((run) => run.status === "preparing").length,
+    waitingForCodexRuns: batch.runs.filter((run) => run.status === "waiting_for_codex").length,
+    runningRuns: batch.runs.filter((run) => run.status === "running").length,
+    queuedRuns: batch.runs.filter((run) => run.status === "queued").length,
+    config: batch.config,
+    generation: batch.generation,
+  };
+}
+
+function normalizeFilterList(filters: readonly string[]): string[] {
+  return Array.from(new Set(
+    filters
+      .map((filterValue) => String(filterValue ?? "").trim())
+      .filter(Boolean),
+  ));
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+function buildPersistedUiState(
+  state: Pick<AppState, "selectedBatchId" | "selectedRunId" | "activeTab" | "projectFilters">,
+): NavigationState {
+  return {
+    selectedBatchId: state.selectedBatchId,
+    selectedRunId: state.selectedRunId,
+    activeTab: state.activeTab,
+    projectFilters: state.projectFilters,
+  };
+}
+
+function syncPersistedUiState(
+  state: Pick<AppState, "selectedBatchId" | "selectedRunId" | "activeTab" | "projectFilters">,
+): void {
+  syncNavigationSelectionToLocation({
+    selectedBatchId: state.selectedBatchId,
+    selectedRunId: state.selectedRunId,
+    activeTab: state.activeTab,
+  });
+  saveUiPreferences({ projectFilters: state.projectFilters });
 }
 
 export function getProjectFilterOptions(batches: BatchSummary[]) {
   return buildProjectPathOptions(batches.map(getProjectPath));
 }
 
-export const selectSelectedBatch = (s: AppState) =>
-  s.selectedBatchId ? s.batchDetails.get(s.selectedBatchId) ?? null : null;
+export const selectSelectedBatch = (state: AppState) =>
+  state.selectedBatchId ? state.batchDetails.get(state.selectedBatchId) ?? null : null;
 
-export const selectVisibleBatches = (s: AppState) => {
-  if (s.projectFilters.length === 0) return s.batches;
-  const activeSet = new Set(s.projectFilters);
-  return s.batches.filter((b) => activeSet.has(getProjectPath(b)));
+export const selectVisibleBatches = (state: AppState) => {
+  if (state.projectFilters.length === 0) {
+    return state.batches;
+  }
+
+  const activeSet = new Set(state.projectFilters);
+  return state.batches.filter((batch) => activeSet.has(getProjectPath(batch)));
 };
 
 let toastCounter = 0;
@@ -147,51 +196,45 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addToast: (type, title, message) => {
     const id = String(++toastCounter);
-    set((s) => ({ toasts: [...s.toasts, { id, type, title, message }] }));
+    set((state) => ({ toasts: [...state.toasts, { id, type, title, message }] }));
     return id;
   },
 
   removeToast: (id) => {
-    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+    set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
   },
 
-  sortBatches: (list) => [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+  sortBatches: (list) => [...list].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
 
   upsertBatchSummary: (summary) => {
     const { batches, sortBatches } = get();
-    const idx = batches.findIndex((r) => r.id === summary.id);
-    let next: BatchSummary[];
-    if (idx >= 0) {
-      next = [...batches];
-      next[idx] = summary;
-    } else {
-      next = [...batches, summary];
-    }
-    set({ batches: sortBatches(next) });
+    const existingIndex = batches.findIndex((batch) => batch.id === summary.id);
+    const nextBatches = existingIndex >= 0
+      ? batches.map((batch, index) => (index === existingIndex ? summary : batch))
+      : [...batches, summary];
+    set({ batches: sortBatches(nextBatches) });
   },
 
   removeBatchFromState: (batchId) => {
     const state = get();
-    const newMap = new Map(state.batchDetails);
-    newMap.delete(batchId);
+    const nextBatchDetails = new Map(state.batchDetails);
+    nextBatchDetails.delete(batchId);
+
     set({
-      batches: state.batches.filter((b) => b.id !== batchId),
-      batchDetails: newMap,
-      ...(state.selectedBatchId === batchId
-        ? { selectedBatchId: null, selectedRunId: null, activeTab: "session" }
-        : {}),
+      batches: state.batches.filter((batch) => batch.id !== batchId),
+      batchDetails: nextBatchDetails,
       ...(state.deleteDialog.batchId === batchId
         ? { deleteDialog: { ...state.deleteDialog, batchId: null } }
         : {}),
     });
-    get().syncSelectedBatch();
+    get().reconcileSelection();
   },
 
   setBatchDetail: (batch) => {
     const { batchDetails, upsertBatchSummary } = get();
-    const newMap = new Map(batchDetails);
-    newMap.set(batch.id, batch);
-    set({ batchDetails: newMap });
+    const nextBatchDetails = new Map(batchDetails);
+    nextBatchDetails.set(batch.id, batch);
+    set({ batchDetails: nextBatchDetails });
     upsertBatchSummary(buildBatchSummary(batch));
   },
 
@@ -208,9 +251,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       runs: existing.runs,
     };
 
-    const newMap = new Map(batchDetails);
-    newMap.set(batchId, merged);
-    set({ batchDetails: newMap });
+    const nextBatchDetails = new Map(batchDetails);
+    nextBatchDetails.set(batchId, merged);
+    set({ batchDetails: nextBatchDetails });
     upsertBatchSummary(buildBatchSummary(merged));
   },
 
@@ -235,33 +278,90 @@ export const useAppStore = create<AppState>((set, get) => ({
       runs: nextRuns,
     };
 
-    const newMap = new Map(batchDetails);
-    newMap.set(batchId, merged);
-    set({ batchDetails: newMap });
+    const nextBatchDetails = new Map(batchDetails);
+    nextBatchDetails.set(batchId, merged);
+    set({ batchDetails: nextBatchDetails });
     upsertBatchSummary(summary ?? buildBatchSummary(merged));
   },
 
-  normalizeProjectFilters: () => {
-    const state = get();
-    const options = getProjectFilterOptions(state.batches);
-    const optionValues = new Set(options.map((o) => o.value));
-    const normalized = Array.from(new Set(state.projectFilters)).filter((v) => optionValues.has(v));
-    if (
-      normalized.length !== state.projectFilters.length ||
-      normalized.some((v, i) => v !== state.projectFilters[i])
-    ) {
-      set({ projectFilters: normalized });
-    }
-    return options;
+  hydrateNavigationState: (navigationState) => {
+    set((state) => ({
+      ...(navigationState.selectedBatchId !== undefined ? { selectedBatchId: navigationState.selectedBatchId } : {}),
+      ...(navigationState.selectedRunId !== undefined ? { selectedRunId: navigationState.selectedRunId } : {}),
+      ...(navigationState.activeTab !== undefined ? { activeTab: navigationState.activeTab } : {}),
+      ...(navigationState.projectFilters !== undefined
+        ? { projectFilters: normalizeFilterList(navigationState.projectFilters) }
+        : {}),
+    }));
   },
 
-  syncSelectedBatch: () => {
-    get().normalizeProjectFilters();
-    const state = get();
-    const visible = selectVisibleBatches(state);
-    const isVisible = visible.some((b) => b.id === state.selectedBatchId);
-    if (!isVisible) {
-      set({ selectedBatchId: visible[0]?.id ?? null, selectedRunId: null, activeTab: "session" });
+  selectBatch: (batchId) => {
+    const normalizedBatchId = String(batchId ?? "").trim() || null;
+    if (get().selectedBatchId === normalizedBatchId) {
+      return;
     }
+
+    set({
+      selectedBatchId: normalizedBatchId,
+      selectedRunId: null,
+    });
+    get().reconcileSelection();
+  },
+
+  selectRun: (runId) => {
+    const normalizedRunId = String(runId ?? "").trim() || null;
+    if (get().selectedRunId === normalizedRunId) {
+      return;
+    }
+
+    set({ selectedRunId: normalizedRunId });
+    get().reconcileSelection();
+  },
+
+  selectTab: (tab) => {
+    if (get().activeTab === tab) {
+      return;
+    }
+
+    set({ activeTab: tab });
+    syncPersistedUiState(get());
+  },
+
+  setProjectFilters: (filters) => {
+    set({ projectFilters: normalizeFilterList(filters) });
+    get().reconcileSelection();
+  },
+
+  reconcileSelection: (options) => {
+    const state = get();
+    const nextProjectFilters = options?.preferSelectedBatchVisible
+      ? ensureSelectedBatchVisibleInFilters(state.projectFilters, state.batches, state.selectedBatchId)
+      : state.projectFilters;
+    const reconciled = reconcileNavigationState({
+      ...buildPersistedUiState({
+        selectedBatchId: state.selectedBatchId,
+        selectedRunId: state.selectedRunId,
+        activeTab: state.activeTab,
+        projectFilters: nextProjectFilters,
+      }),
+      batches: state.batches,
+      batchDetails: state.batchDetails,
+    });
+
+    if (
+      state.selectedBatchId !== reconciled.selectedBatchId
+      || state.selectedRunId !== reconciled.selectedRunId
+      || state.activeTab !== reconciled.activeTab
+      || !sameStringArray(state.projectFilters, reconciled.projectFilters)
+    ) {
+      set({
+        selectedBatchId: reconciled.selectedBatchId,
+        selectedRunId: reconciled.selectedRunId,
+        activeTab: reconciled.activeTab,
+        projectFilters: reconciled.projectFilters,
+      });
+    }
+
+    syncPersistedUiState(reconciled);
   },
 }));

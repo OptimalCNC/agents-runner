@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 import { useState } from "react";
 import type { Run } from "../types.js";
 import { useAppStore } from "../state/store.js";
+import type { RunDetailTab } from "../state/navigation.js";
 import { formatDate } from "../utils/format.js";
 import { StatusPill } from "./StatusPill.js";
 import { SessionPanel } from "./SessionPanel.js";
@@ -40,10 +41,7 @@ function formatUsageSummary(run: Run): string {
 export function RunDetail({ run }: Props) {
   const [logsOpen, setLogsOpen] = useState(false);
   const selectedBatchId = useAppStore((state) => state.selectedBatchId);
-  const activePanel = useAppStore((state) => {
-    const allowed = new Set(["session", "review"]);
-    return allowed.has(state.activeTab) ? state.activeTab : "session";
-  });
+  const activePanel = useAppStore((state) => state.activeTab);
 
   if (!run) {
     return (
@@ -66,7 +64,7 @@ export function RunDetail({ run }: Props) {
 
   const directory = run.workingDirectory || run.worktreePath || "Pending";
   const usageSummary = formatUsageSummary(run);
-  const panels = [
+  const panels: { key: RunDetailTab; label: string }[] = [
     { key: "session", label: "Session" },
     { key: "review", label: "Review" },
   ];
@@ -122,7 +120,7 @@ export function RunDetail({ run }: Props) {
             key={panel.key}
             className={`run-detail-tab${activePanel === panel.key ? " is-active" : ""}`}
             type="button"
-            onClick={() => useAppStore.setState({ activeTab: panel.key })}
+            onClick={() => useAppStore.getState().selectTab(panel.key)}
           >
             {panel.label}
           </button>

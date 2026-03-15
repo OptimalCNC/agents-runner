@@ -13,8 +13,7 @@ export function ProjectFilter() {
     const next = filters.includes(value)
       ? filters.filter((v) => v !== value)
       : [...filters, value];
-    useAppStore.setState({ projectFilters: next });
-    useAppStore.getState().syncSelectedBatch();
+    useAppStore.getState().setProjectFilters(next);
   }
 
   return (

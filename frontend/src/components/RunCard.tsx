@@ -12,7 +12,7 @@ export function RunCard({ run }: Props) {
   const reviewSummary = run.review?.statusShort.split("\n")[0].trim();
 
   function handleClick() {
-    useAppStore.setState({ selectedRunId: run.id, activeTab: "session" });
+    useAppStore.getState().selectRun(run.id);
   }
 
   return (

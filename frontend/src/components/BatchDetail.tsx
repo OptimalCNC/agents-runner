@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useAppStore, selectSelectedBatch } from "../state/store.js";
 import { apiCancelBatch } from "../state/api.js";
 import { StatusPill } from "./StatusPill.js";
@@ -11,17 +10,6 @@ import { summarizeRunCounts } from "../utils/runStatus.js";
 export function BatchDetail() {
   const batch = useAppStore(selectSelectedBatch);
   const selectedRunId = useAppStore((s) => s.selectedRunId);
-
-  // Ensure selectedRunId is valid
-  const validRunId = batch?.runs.find((r) => r.id === selectedRunId)
-    ? selectedRunId
-    : (batch?.runs[0]?.id ?? null);
-
-  useEffect(() => {
-    if (validRunId !== selectedRunId) {
-      useAppStore.setState({ selectedRunId: validRunId });
-    }
-  }, [validRunId]);
 
   if (!batch) {
     return (
@@ -41,7 +29,7 @@ export function BatchDetail() {
     );
   }
 
-  const selectedRun = batch.runs.find((r) => r.id === validRunId) ?? null;
+  const selectedRun = batch.runs.find((r) => r.id === selectedRunId) ?? null;
   const canCancel = batch.status === "running" || batch.status === "queued";
   const baseRef = batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "Current HEAD";
 

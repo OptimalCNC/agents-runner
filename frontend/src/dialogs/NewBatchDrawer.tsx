@@ -206,17 +206,16 @@ export function NewBatchDrawer() {
       };
 
       const response = await apiSubmitBatch(payload);
-      const { setBatchDetail, syncSelectedBatch } = useAppStore.getState();
-      useAppStore.setState({ selectedBatchId: response.batch.id, selectedRunId: null });
+      const { setBatchDetail, selectBatch, setProjectFilters } = useAppStore.getState();
       rememberProjectPath(response.batch.config.projectPath);
+      setBatchDetail(response.batch);
 
       const currentFilters = useAppStore.getState().projectFilters;
       if (currentFilters.length > 0 && !currentFilters.includes(response.batch.config.projectPath)) {
-        useAppStore.setState({ projectFilters: [...currentFilters, response.batch.config.projectPath] });
+        setProjectFilters([...currentFilters, response.batch.config.projectPath]);
       }
 
-      setBatchDetail(response.batch);
-      syncSelectedBatch();
+      selectBatch(response.batch.id);
       closeDrawer();
       useAppStore.getState().addToast("success", "Batch started", `${response.batch.title} is now running.`);
     } catch (err) {

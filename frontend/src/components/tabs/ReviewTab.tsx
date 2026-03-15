@@ -171,7 +171,7 @@ export function ReviewTab({ run }: Props) {
 
       const payload = await apiContinueRun(batch.id, run.id, buildCommitPrompt(reviewFilePaths));
       useAppStore.getState().setBatchDetail(payload.batch);
-      useAppStore.setState({ activeTab: "session" });
+      useAppStore.getState().selectTab("session");
       useAppStore.getState().addToast(
         "success",
         branchWasCreated ? "Branch created and commit requested" : "Commit requested",
