@@ -48,6 +48,7 @@ export interface ProjectContext {
 }
 
 export interface RunLog {
+  id: string;
   at: string;
   level: string;
   message: string;

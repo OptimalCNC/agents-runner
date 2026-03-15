@@ -34,6 +34,7 @@ const WORKTREE_REMOVE_RETRY_DELAY_MS = 500;
 const WORKTREE_REMOVE_RETRY_ATTEMPTS = 6;
 const BATCH_SETTLE_TIMEOUT_MS = 5_000;
 const NON_INTERACTIVE_APPROVAL_POLICY = "never" as const;
+let logIdCounter = 0;
 const RUN_ID_LENGTH = 5;
 
 interface ExecutionState {
@@ -46,6 +47,11 @@ const executionRegistry = new Map<string, ExecutionState>();
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function createLogId(): string {
+  logIdCounter += 1;
+  return `log-${Date.now().toString(36)}-${logIdCounter.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -112,6 +118,7 @@ function upsertItemList(items: StreamItem[], item: unknown): void {
 
 function appendLog(run: Run, level: string, message: string): void {
   run.logs.push({
+    id: createLogId(),
     at: nowIso(),
     level,
     message: truncateText(message, 1_200),

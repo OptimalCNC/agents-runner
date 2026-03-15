@@ -905,17 +905,22 @@ button { cursor: pointer; }
 .run-logs-panel {
   width: min(760px, 92vw);
   max-height: min(78vh, 900px);
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);
 }
 
+.run-logs-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 .run-logs-panel-header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -952,6 +957,98 @@ button { cursor: pointer; }
 }
 
 .tab-panel.is-active { display: block; }
+
+.run-logs-tab {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 0;
+}
+
+.run-logs-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(16, 19, 28, 0.98), rgba(16, 19, 28, 0.94));
+  backdrop-filter: blur(8px);
+}
+
+.run-logs-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.run-logs-toolbar-search-row {
+  align-items: stretch;
+}
+
+.run-logs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.run-logs-filter-chip {
+  gap: 6px;
+}
+
+.filter-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.filter-chip.is-active .filter-chip-count {
+  color: currentColor;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.run-logs-search {
+  position: relative;
+  flex: 1;
+  min-width: min(260px, 100%);
+}
+
+.run-logs-search input {
+  padding-left: 34px;
+}
+
+.run-logs-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 11px;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.run-logs-summary {
+  white-space: nowrap;
+}
+
+.run-logs-list {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+}
+
+.run-logs-empty {
+  padding: 22px 16px 30px;
+}
 
 .tab-panel-toolbar {
   display: flex;
@@ -1936,6 +2033,7 @@ button { cursor: pointer; }
 }
 
 .log-level-info { color: var(--info); }
+.log-level-warning { color: var(--warning); }
 .log-level-warn { color: var(--warning); }
 .log-level-error { color: var(--danger); }
 .log-level-debug { color: var(--text-tertiary); }

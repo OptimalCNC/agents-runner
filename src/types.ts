@@ -70,6 +70,7 @@ export interface ProjectContext {
 // --- Run data ---
 
 export interface RunLog {
+  id: string;
   at: string;
   level: string;
   message: string;

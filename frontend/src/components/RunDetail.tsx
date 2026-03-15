@@ -155,9 +155,11 @@ export function RunDetail({ run }: Props) {
                 Close
               </button>
             </div>
-            <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading logs...</div>}>
-              <LogsTab run={run} />
-            </Suspense>
+            <div className="run-logs-panel-body">
+              <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading logs...</div>}>
+                <LogsTab key={run.id} run={run} />
+              </Suspense>
+            </div>
           </div>
         </div>
       )}

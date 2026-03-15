@@ -13,6 +13,7 @@ import type {
   BatchSummary,
   GenerationState,
   Run,
+  RunLog,
 } from "../types";
 
 function clone<T>(value: T): T {
@@ -25,6 +26,17 @@ function nowIso(): string {
 
 function createId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeLoadedLog(log: RunLog, runId: string, index: number): RunLog {
+  const nextLog = clone(log);
+  nextLog.id = typeof nextLog.id === "string" && nextLog.id.trim()
+    ? nextLog.id
+    : `log-legacy-${runId}-${index.toString(36)}`;
+  nextLog.at = String(nextLog.at ?? "");
+  nextLog.level = String(nextLog.level ?? "info");
+  nextLog.message = String(nextLog.message ?? "");
+  return nextLog;
 }
 
 function sortBatches(batches: BatchSummary[]): BatchSummary[] {
@@ -58,6 +70,10 @@ function normalizeLoadedRun(run: Run): Run {
       items: Array.isArray(nextRun.items) ? nextRun.items : [],
     }];
   }
+
+  nextRun.logs = Array.isArray(nextRun.logs)
+    ? nextRun.logs.map((log, index) => normalizeLoadedLog(log, nextRun.id, index))
+    : [];
 
   nextRun.items = nextRun.turns.flatMap((turn) =>
     (turn.items || []).map((item) => ({
