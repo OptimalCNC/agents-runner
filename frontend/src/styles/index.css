@@ -2536,6 +2536,7 @@ select {
   color: var(--text-primary);
   padding: 0;
   box-shadow: var(--shadow-xl);
+  overflow-x: hidden;
 }
 
 .dialog::backdrop {
@@ -2622,7 +2623,9 @@ select {
 }
 
 .delete-dialog-shell {
-  width: min(640px, calc(100vw - 40px));
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .delete-dialog-body {
@@ -2630,6 +2633,7 @@ select {
   flex-direction: column;
   gap: 14px;
   padding: 16px;
+  min-width: 0;
 }
 
 .delete-dialog-copy {
@@ -2644,6 +2648,7 @@ select {
   color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
+  min-width: 0;
 }
 
 .delete-dialog-option input {
@@ -2671,91 +2676,163 @@ select {
   color: var(--warning);
 }
 
+.delete-dialog-hint.is-safe {
+  color: var(--success);
+}
+
 .delete-dialog-hint.is-error {
   color: var(--danger);
 }
 
-.delete-dialog-preview {
+.delete-dialog-preview-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.delete-dialog-preview-summary-top {
+  margin-top: 2px;
+}
+
+.delete-dialog-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+  min-width: 0;
+}
+
+.delete-dialog-run-card {
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-raised);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(24, 24, 27, 0.96));
+  min-width: 0;
 }
 
-.delete-dialog-preview.is-warning {
-  border-color: rgba(245, 158, 11, 0.35);
-  background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(24, 24, 27, 0.95));
-}
-
-.delete-dialog-preview.is-error {
-  border-color: rgba(239, 68, 68, 0.35);
-}
-
-.delete-dialog-preview-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.delete-dialog-preview-title svg {
-  color: var(--warning);
-}
-
-.delete-dialog-preview-summary {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.delete-dialog-preview-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.delete-dialog-preview-item {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.delete-dialog-preview-item.is-disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
-.delete-dialog-preview-item.is-selected {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.delete-dialog-preview-item-header {
+.delete-dialog-run-card-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
-.delete-dialog-preview-run {
+.delete-dialog-run-title {
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.delete-dialog-preview-meta {
-  font-size: 12px;
+.delete-dialog-run-index {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--text-tertiary);
-  text-align: right;
+}
+
+.delete-dialog-run-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  border-left-width: 3px;
+  min-width: 0;
+}
+
+.delete-dialog-run-row.is-safe {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.delete-dialog-run-row.is-warning {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.delete-dialog-run-row.is-error {
+  border-color: rgba(239, 68, 68, 0.22);
+  background: rgba(239, 68, 68, 0.07);
+}
+
+.delete-dialog-run-row.is-disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.delete-dialog-run-row.is-selected {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.delete-dialog-run-row.is-branch-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  cursor: pointer;
+}
+
+.delete-dialog-run-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.delete-dialog-run-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.delete-dialog-run-row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.delete-dialog-run-row.is-safe .delete-dialog-run-row-label svg,
+.delete-dialog-run-row.is-safe .delete-dialog-run-row-status {
+  color: var(--success);
+}
+
+.delete-dialog-run-row.is-warning .delete-dialog-run-row-label svg,
+.delete-dialog-run-row.is-warning .delete-dialog-run-row-status {
+  color: var(--warning);
+}
+
+.delete-dialog-run-row.is-error .delete-dialog-run-row-label svg,
+.delete-dialog-run-row.is-error .delete-dialog-run-row-status {
+  color: var(--danger);
+}
+
+.delete-dialog-run-row-status {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .delete-dialog-preview-path {
@@ -2763,13 +2840,6 @@ select {
   font-size: 11px;
   color: var(--text-tertiary);
   word-break: break-all;
-}
-
-.delete-dialog-branch-item {
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 12px;
-  cursor: pointer;
 }
 
 .delete-dialog-branch-checkbox {
@@ -2786,12 +2856,11 @@ select {
   cursor: not-allowed;
 }
 
-.delete-dialog-branch-copy {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
+.delete-dialog-run-row-copy {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .delete-dialog-branch-name {
@@ -2799,12 +2868,7 @@ select {
   font-size: 12px;
   color: var(--text-primary);
   word-break: break-all;
-}
-
-.delete-dialog-branch-reason {
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.5;
+  max-width: 100%;
 }
 
 /* ───────────────────── Toast ───────────────────── */

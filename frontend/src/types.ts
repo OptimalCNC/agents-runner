@@ -288,6 +288,8 @@ export interface WorktreeInspection {
 
 export interface BatchDeleteWorktreePreviewEntry extends WorktreeInspection {
   runId: string;
+  runIndex: number;
+  runTitle: string;
 }
 
 export interface BatchDeleteBranchPreviewEntry {
