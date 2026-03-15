@@ -6,9 +6,11 @@ import {
   collectWorktreeReview,
   createWorktreeBranch,
   createWorktree,
+  inspectBranchDeleteCandidate,
   inspectProject,
   inspectWorktreeChanges,
   pruneWorktrees,
+  removeBranch,
   removeWorktree,
 } from "./git";
 import { isAbortError } from "./process";
@@ -16,8 +18,12 @@ import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 
 import type {
   Batch,
+  BatchDeleteBranchPreviewEntry,
+  BatchDeletePreview,
+  BatchDeleteWorktreePreviewEntry,
   BatchStatus,
   BatchStore,
+  BranchRemovalResult,
   GenerationTask,
   ProjectContext,
   Run,
@@ -257,50 +263,104 @@ function syncRunDerivedState(run: Run): void {
     run.startedAt = firstStartedAt;
   }
 }
+const CREATED_BRANCH_LOG_PREFIX = "Created branch ";
+const CREATED_BRANCH_LOG_SUFFIX = ".";
 
-interface WorktreePreviewEntry {
-  runId: string;
-  runIndex: number;
-  runTitle: string;
-  worktreePath: string;
-  isDirty: boolean;
-  changeCount: number;
-  trackedChangeCount: number;
-  untrackedChangeCount: number;
-  exists: boolean;
-  error: string;
+function getRunCreatedBranchName(run: Run): string | null {
+  for (let index = run.logs.length - 1; index >= 0; index -= 1) {
+    const message = String(run.logs[index]?.message ?? "");
+    if (!message.startsWith(CREATED_BRANCH_LOG_PREFIX) || !message.endsWith(CREATED_BRANCH_LOG_SUFFIX)) {
+      continue;
+    }
+
+    const branchName = message
+      .slice(CREATED_BRANCH_LOG_PREFIX.length, message.length - CREATED_BRANCH_LOG_SUFFIX.length)
+      .trim();
+    if (branchName) {
+      return branchName;
+    }
+  }
+
+  return null;
 }
 
-interface BatchWorktreePreview {
-  batchId: string;
-  worktreeCount: number;
-  dirtyWorktreeCount: number;
-  inspectFailureCount: number;
-  worktrees: WorktreePreviewEntry[];
+function resolveRunDeleteComparisonRef(batch: Batch, run: Run): string | null {
+  return run.baseRef || batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || null;
 }
 
-async function buildBatchWorktreePreview(batch: Batch): Promise<BatchWorktreePreview> {
+function buildWorktreePreviewEntry(run: Run, summary: Awaited<ReturnType<typeof inspectWorktreeChanges>>): BatchDeleteWorktreePreviewEntry {
+  return {
+    runId: run.id,
+    runIndex: run.index,
+    runTitle: run.title,
+    worktreePath: summary.worktreePath,
+    isDirty: summary.isDirty,
+    changeCount: summary.changeCount,
+    trackedChangeCount: summary.trackedChangeCount,
+    untrackedChangeCount: summary.untrackedChangeCount,
+    exists: summary.exists,
+    statusEntries: summary.statusEntries,
+    error: summary.error,
+  };
+}
+
+async function buildBatchDeletePreview(batch: Batch, repoRoot?: string | null): Promise<BatchDeletePreview> {
   const worktreeRuns = getBatchWorktreeRuns(batch);
-  const worktrees: WorktreePreviewEntry[] = await Promise.all(
+  const worktrees: BatchDeleteWorktreePreviewEntry[] = await Promise.all(
     worktreeRuns.map(async (run) => {
       const summary = await inspectWorktreeChanges(run.worktreePath!);
-      return {
-        runId: run.id,
-        runIndex: run.index,
-        runTitle: run.title,
-        worktreePath: summary.worktreePath,
-        isDirty: summary.isDirty,
-        changeCount: summary.changeCount,
-        trackedChangeCount: summary.trackedChangeCount,
-        untrackedChangeCount: summary.untrackedChangeCount,
-        exists: summary.exists,
-        error: summary.error,
-      };
+      return buildWorktreePreviewEntry(run, summary);
     }),
   );
+  const branchRuns = batch.runs
+    .map((run) => ({ run, branchName: getRunCreatedBranchName(run) }))
+    .filter((entry): entry is { run: Run; branchName: string } => Boolean(entry.branchName));
+
+  let resolvedRepoRoot = repoRoot || null;
+  let repoRootError = "";
+  if (!resolvedRepoRoot && branchRuns.length > 0) {
+    try {
+      resolvedRepoRoot = await resolveBatchRepoRoot(batch);
+    } catch (error) {
+      repoRootError = (error as Error).message || "Failed to resolve the repository root.";
+    }
+  }
+
+  const branches: BatchDeleteBranchPreviewEntry[] = resolvedRepoRoot
+    ? await Promise.all(
+      branchRuns.map(({ run, branchName }) =>
+        inspectBranchDeleteCandidate({
+          repoRoot: resolvedRepoRoot!,
+          runId: run.id,
+          runIndex: run.index,
+          runTitle: run.title,
+          branchName,
+          comparisonRef: resolveRunDeleteComparisonRef(batch, run),
+        }),
+      ),
+    )
+    : branchRuns.map(({ run, branchName }) => ({
+      runId: run.id,
+      runIndex: run.index,
+      runTitle: run.title,
+      branchName,
+      comparisonRef: resolveRunDeleteComparisonRef(batch, run),
+      exists: true,
+      aheadCount: null,
+      behindCount: null,
+      safeToDelete: false,
+      canDelete: false,
+      deleteByDefault: false,
+      requiresForce: false,
+      decisionReason: "Could not inspect this branch right now. Kept unchecked by default.",
+      error: repoRootError || "Failed to resolve the repository root.",
+    }));
 
   const dirtyWorktrees = worktrees.filter((entry) => entry.isDirty);
   const inspectFailures = worktrees.filter((entry) => entry.error);
+  const safeBranches = branches.filter((entry) => entry.safeToDelete && entry.canDelete);
+  const riskyBranches = branches.filter((entry) => entry.exists && entry.canDelete && !entry.safeToDelete);
+  const branchInspectFailures = branches.filter((entry) => entry.error);
 
   return {
     batchId: batch.id,
@@ -308,6 +368,11 @@ async function buildBatchWorktreePreview(batch: Batch): Promise<BatchWorktreePre
     dirtyWorktreeCount: dirtyWorktrees.length,
     inspectFailureCount: inspectFailures.length,
     worktrees,
+    branchCount: branches.length,
+    safeBranchCount: safeBranches.length,
+    riskyBranchCount: riskyBranches.length,
+    branchInspectFailureCount: branchInspectFailures.length,
+    branches,
   };
 }
 
@@ -320,7 +385,10 @@ async function resolveBatchRepoRoot(batch: Batch): Promise<string> {
   return projectContext.repoRoot;
 }
 
-function buildCleanupFailureMessage(failedEntries: Array<{ runTitle: string; error: string }>): string {
+function buildCleanupFailureMessage(
+  label: "worktree" | "branch",
+  failedEntries: Array<{ runTitle: string; error: string }>,
+): string {
   if (failedEntries.length === 0) {
     return "";
   }
@@ -329,9 +397,12 @@ function buildCleanupFailureMessage(failedEntries: Array<{ runTitle: string; err
     .map((entry) => `${entry.runTitle}: ${entry.error}`)
     .join(" | ");
 
+  const singularLabel = label;
+  const pluralLabel = `${label}s`;
+
   return failedEntries.length === 1
-    ? `Failed to remove 1 worktree. ${details}`
-    : `Failed to remove ${failedEntries.length} worktrees. ${details}`;
+    ? `Failed to remove 1 ${singularLabel}. ${details}`
+    : `Failed to remove ${failedEntries.length} ${pluralLabel}. ${details}`;
 }
 
 class BatchDeleteCleanupError extends Error {
@@ -371,12 +442,31 @@ function isRetryableWorktreeRemovalError(message: string | null | undefined): bo
 
 async function removeWorktreeWithRetries(
   repoRoot: string,
-  entry: WorktreePreviewEntry,
+  entry: BatchDeleteWorktreePreviewEntry,
 ): Promise<WorktreeRemovalResult> {
   let result: WorktreeRemovalResult | null = null;
 
   for (let attempt = 0; attempt < WORKTREE_REMOVE_RETRY_ATTEMPTS; attempt += 1) {
     result = await removeWorktree(repoRoot, entry.worktreePath);
+    if (result.removed || !isRetryableWorktreeRemovalError(result.error)) {
+      return result;
+    }
+
+    await sleep(WORKTREE_REMOVE_RETRY_DELAY_MS);
+  }
+
+  return result!;
+}
+
+async function removeBranchWithRetries(
+  repoRoot: string,
+  branchName: string,
+  force: boolean,
+): Promise<BranchRemovalResult> {
+  let result: BranchRemovalResult | null = null;
+
+  for (let attempt = 0; attempt < WORKTREE_REMOVE_RETRY_ATTEMPTS; attempt += 1) {
+    result = await removeBranch(repoRoot, branchName, { force });
     if (result.removed || !isRetryableWorktreeRemovalError(result.error)) {
       return result;
     }
@@ -1173,30 +1263,42 @@ export function cancelBatch(store: BatchStore, batchId: string): Batch | null {
   return store.getBatch(batchId);
 }
 
-export async function previewBatchDelete(store: BatchStore, batchId: string): Promise<BatchWorktreePreview | null> {
+export async function previewBatchDelete(store: BatchStore, batchId: string): Promise<BatchDeletePreview | null> {
   const batch = store.getBatch(batchId);
   if (!batch) {
     return null;
   }
 
-  return buildBatchWorktreePreview(batch);
+  return buildBatchDeletePreview(batch);
 }
 
 export interface DeleteBatchOptions {
   removeWorktrees?: boolean;
+  removeBranches?: string[];
 }
 
 interface WorktreeCleanupResult {
   removedCount: number;
   failedCount: number;
-  worktrees: Array<WorktreePreviewEntry & { removed: boolean; error: string }>;
+  worktrees: Array<BatchDeleteWorktreePreviewEntry & { removed: boolean; error: string }>;
   pruneError: string;
+}
+
+interface BranchCleanupResult {
+  removedCount: number;
+  failedCount: number;
+  branches: Array<BatchDeleteBranchPreviewEntry & { removed: boolean; forced: boolean; error: string }>;
+}
+
+interface DeleteBatchCleanupResult {
+  worktrees: WorktreeCleanupResult;
+  branches: BranchCleanupResult;
 }
 
 export interface DeleteBatchResult {
   batch: Batch | null;
-  deletePreview: BatchWorktreePreview | null;
-  cleanup: WorktreeCleanupResult | null;
+  deletePreview: BatchDeletePreview | null;
+  cleanup: DeleteBatchCleanupResult | null;
 }
 
 export async function deleteBatch(store: BatchStore, batchId: string, options: DeleteBatchOptions = {}): Promise<DeleteBatchResult | null> {
@@ -1206,29 +1308,59 @@ export async function deleteBatch(store: BatchStore, batchId: string, options: D
   }
 
   const removeWorktreesRequested = Boolean(options.removeWorktrees);
+  const selectedBranchNames = Array.from(new Set(
+    (options.removeBranches || [])
+      .map((value) => String(value ?? "").trim())
+      .filter(Boolean),
+  ));
   batch.cancelRequested = true;
   abortBatchExecution(batchId);
   store.updateBatch(batchId, () => {});
 
-  let deletePreview: BatchWorktreePreview | null = null;
-  let cleanup: WorktreeCleanupResult | null = null;
+  let deletePreview: BatchDeletePreview | null = null;
+  let cleanup: DeleteBatchCleanupResult | null = null;
   if (removeWorktreesRequested) {
     await waitForBatchToSettle(store, batchId);
-    deletePreview = await buildBatchWorktreePreview(batch);
-
-    if (deletePreview.worktreeCount > 0) {
-      let repoRoot: string;
+    let repoRoot: string | null = null;
+    if (selectedBranchNames.length > 0) {
       try {
         repoRoot = await resolveBatchRepoRoot(batch);
       } catch (error) {
-        throw new BatchDeleteCleanupError(`Failed to resolve the repository root for worktree cleanup. ${(error as Error).message}`, {
-          deletePreview,
+        throw new BatchDeleteCleanupError(`Failed to resolve the repository root for branch cleanup. ${(error as Error).message}`, {
+          deletePreview: null,
           cleanup: null,
         });
       }
+    }
+    deletePreview = await buildBatchDeletePreview(batch, repoRoot);
+    cleanup = {
+      worktrees: {
+        removedCount: 0,
+        failedCount: 0,
+        worktrees: [],
+        pruneError: "",
+      },
+      branches: {
+        removedCount: 0,
+        failedCount: 0,
+        branches: [],
+      },
+    };
+
+    if (deletePreview.worktreeCount > 0) {
+      if (!repoRoot) {
+        try {
+          repoRoot = await resolveBatchRepoRoot(batch);
+        } catch (error) {
+          throw new BatchDeleteCleanupError(`Failed to resolve the repository root for worktree cleanup. ${(error as Error).message}`, {
+            deletePreview,
+            cleanup,
+          });
+        }
+      }
       const removals = await Promise.all(
         deletePreview.worktrees.map(async (entry) => {
-          const result = await removeWorktreeWithRetries(repoRoot, entry);
+          const result = await removeWorktreeWithRetries(repoRoot!, entry);
           return {
             ...entry,
             removed: result.removed,
@@ -1239,26 +1371,87 @@ export async function deleteBatch(store: BatchStore, batchId: string, options: D
 
       const pruneResult = await pruneWorktrees(repoRoot);
       const failedRemovals = removals.filter((entry) => !entry.removed);
-      cleanup = {
+      cleanup.worktrees = {
         removedCount: removals.filter((entry) => entry.removed).length,
         failedCount: failedRemovals.length,
         worktrees: removals,
         pruneError: pruneResult.ok ? "" : pruneResult.error,
       };
 
-      if (failedRemovals.length > 0 || cleanup.pruneError) {
-        throw new BatchDeleteCleanupError(buildCleanupFailureMessage(failedRemovals) || cleanup.pruneError, {
+      if (failedRemovals.length > 0 || cleanup.worktrees.pruneError) {
+        throw new BatchDeleteCleanupError(buildCleanupFailureMessage("worktree", failedRemovals) || cleanup.worktrees.pruneError, {
           deletePreview,
           cleanup,
         });
       }
-    } else {
-      cleanup = {
-        removedCount: 0,
-        failedCount: 0,
-        worktrees: [],
-        pruneError: "",
+    }
+
+    if (selectedBranchNames.length > 0) {
+      if (!repoRoot) {
+        try {
+          repoRoot = await resolveBatchRepoRoot(batch);
+        } catch (error) {
+          throw new BatchDeleteCleanupError(`Failed to resolve the repository root for branch cleanup. ${(error as Error).message}`, {
+            deletePreview,
+            cleanup,
+          });
+        }
+      }
+
+      const previewBranchMap = new Map(deletePreview.branches.map((entry) => [entry.branchName, entry]));
+      const invalidSelections = selectedBranchNames.filter((branchName) => !previewBranchMap.has(branchName));
+      if (invalidSelections.length > 0) {
+        throw new BatchDeleteCleanupError(
+          invalidSelections.length === 1
+            ? `Cannot remove branch ${invalidSelections[0]} because it is not part of this batch preview.`
+            : `Cannot remove ${invalidSelections.length} selected branches because they are not part of this batch preview.`,
+          {
+            deletePreview,
+            cleanup,
+          },
+        );
+      }
+
+      const blockedSelections = selectedBranchNames
+        .map((branchName) => previewBranchMap.get(branchName)!)
+        .filter((entry) => !entry.canDelete);
+      if (blockedSelections.length > 0) {
+        throw new BatchDeleteCleanupError(
+          blockedSelections.length === 1
+            ? `Cannot remove branch ${blockedSelections[0].branchName}. ${blockedSelections[0].decisionReason}`
+            : `Cannot remove ${blockedSelections.length} selected branches because at least one branch is not eligible for cleanup.`,
+          {
+            deletePreview,
+            cleanup,
+          },
+        );
+      }
+
+      const branchRemovals = await Promise.all(
+        selectedBranchNames.map(async (branchName) => {
+          const previewEntry = previewBranchMap.get(branchName)!;
+          const result = await removeBranchWithRetries(repoRoot!, branchName, previewEntry.requiresForce);
+          return {
+            ...previewEntry,
+            removed: result.removed,
+            forced: result.forced,
+            error: result.error,
+          };
+        }),
+      );
+      const failedBranchRemovals = branchRemovals.filter((entry) => !entry.removed);
+      cleanup.branches = {
+        removedCount: branchRemovals.filter((entry) => entry.removed).length,
+        failedCount: failedBranchRemovals.length,
+        branches: branchRemovals,
       };
+
+      if (failedBranchRemovals.length > 0) {
+        throw new BatchDeleteCleanupError(buildCleanupFailureMessage("branch", failedBranchRemovals), {
+          deletePreview,
+          cleanup,
+        });
+      }
     }
   }
 

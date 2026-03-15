@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { AppConfig, BatchSummary, Batch, ProjectContext, CodexModel, WorktreeInspection } from "../types.js";
+import type { AppConfig, BatchSummary, Batch, BatchDeletePreview, ProjectContext, CodexModel } from "../types.js";
 import { normalizeMode } from "../utils/format.js";
 import { buildProjectPathOptions, getProjectPath } from "../utils/paths.js";
 import {
@@ -24,7 +24,8 @@ export interface BrowserState {
 export interface DeleteDialogState {
   batchId: string | null;
   removeWorktrees: boolean;
-  preview: { worktreeCount: number; worktrees: WorktreeInspection[] } | null;
+  selectedBranches: string[];
+  preview: BatchDeletePreview | null;
   loading: boolean;
   error: string;
   submitting: boolean;
@@ -178,6 +179,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteDialog: {
     batchId: null,
     removeWorktrees: false,
+    selectedBranches: [],
     preview: null,
     loading: false,
     error: "",

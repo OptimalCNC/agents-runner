@@ -5,10 +5,12 @@ import path from "node:path";
 import { runCommand } from "./process";
 
 import type {
+  BatchDeleteBranchPreviewEntry,
   DirectoryListing,
   ProjectContext,
   RunReview,
   RunReviewUntrackedFile,
+  BranchRemovalResult,
   WorktreeInspection,
   WorktreeRemovalResult,
   PruneResult,
@@ -208,6 +210,153 @@ export async function createWorktreeBranch(worktreePath: string, branchName: str
   await runCommand("git", ["-C", worktreePath, "switch", "-c", nextBranchName]);
 }
 
+interface AheadBehindCounts {
+  aheadCount: number;
+  behindCount: number;
+}
+
+function parseAheadBehindCounts(value: string | null | undefined): AheadBehindCounts | null {
+  const parts = String(value ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const behindCount = Number.parseInt(parts[0], 10);
+  const aheadCount = Number.parseInt(parts[1], 10);
+  if (Number.isNaN(behindCount) || Number.isNaN(aheadCount)) {
+    return null;
+  }
+
+  return { aheadCount, behindCount };
+}
+
+function formatCommitCount(count: number): string {
+  return `${count} commit${count === 1 ? "" : "s"}`;
+}
+
+export interface InspectBranchDeleteCandidateOptions {
+  repoRoot: string;
+  runId: string;
+  runIndex: number;
+  runTitle: string;
+  branchName: string;
+  comparisonRef: string | null;
+}
+
+export async function inspectBranchDeleteCandidate({
+  repoRoot,
+  runId,
+  runIndex,
+  runTitle,
+  branchName,
+  comparisonRef,
+}: InspectBranchDeleteCandidateOptions): Promise<BatchDeleteBranchPreviewEntry> {
+  const resolvedRepoRoot = await fs.realpath(repoRoot).catch(() => path.resolve(repoRoot));
+  const nextBranchName = String(branchName ?? "").trim();
+  const nextComparisonRef = String(comparisonRef ?? "").trim() || null;
+
+  const buildResult = (
+    fields: Partial<BatchDeleteBranchPreviewEntry>,
+  ): BatchDeleteBranchPreviewEntry => ({
+    runId,
+    runIndex,
+    runTitle,
+    branchName: nextBranchName,
+    comparisonRef: nextComparisonRef,
+    exists: false,
+    aheadCount: null,
+    behindCount: null,
+    safeToDelete: false,
+    canDelete: false,
+    deleteByDefault: false,
+    requiresForce: false,
+    decisionReason: "",
+    error: "",
+    ...fields,
+  });
+
+  if (!nextBranchName) {
+    return buildResult({
+      decisionReason: "No batch-created branch was recorded for this run.",
+      error: "Branch name is required.",
+    });
+  }
+
+  const branchExistsResult = await runCommand(
+    "git",
+    ["-C", resolvedRepoRoot, "show-ref", "--verify", "--quiet", `refs/heads/${nextBranchName}`],
+    { allowFailure: true },
+  );
+
+  const branchExists = branchExistsResult.code === 0;
+  if (!branchExists) {
+    return buildResult({
+      decisionReason: "Already missing. Nothing to remove.",
+      error: "",
+    });
+  }
+
+  if (!nextComparisonRef) {
+    return buildResult({
+      exists: true,
+      canDelete: true,
+      requiresForce: true,
+      decisionReason: "Could not compare this branch against the batch base ref. Kept unchecked by default.",
+      error: "Missing comparison ref.",
+    });
+  }
+
+  if (nextBranchName === nextComparisonRef) {
+    return buildResult({
+      exists: true,
+      decisionReason: `Matches ${nextComparisonRef}. Kept unchecked by default.`,
+      error: "Branch matches the batch base ref.",
+    });
+  }
+
+  const compareResult = await runCommand(
+    "git",
+    ["-C", resolvedRepoRoot, "rev-list", "--left-right", "--count", `${nextComparisonRef}...${nextBranchName}`],
+    { allowFailure: true },
+  );
+
+  const compareError = (compareResult.stderr || compareResult.stdout || "").trim();
+  if (compareResult.code !== 0) {
+    return buildResult({
+      exists: true,
+      canDelete: true,
+      requiresForce: true,
+      decisionReason: `Could not compare against ${nextComparisonRef}. Kept unchecked by default.`,
+      error: compareError || "Unable to compare branch history.",
+    });
+  }
+
+  const counts = parseAheadBehindCounts(compareResult.stdout);
+  if (!counts) {
+    return buildResult({
+      exists: true,
+      canDelete: true,
+      requiresForce: true,
+      decisionReason: `Could not compare against ${nextComparisonRef}. Kept unchecked by default.`,
+      error: "Unexpected git rev-list output while comparing branch history.",
+    });
+  }
+
+  const safeToDelete = counts.aheadCount === 0;
+  return buildResult({
+    exists: true,
+    aheadCount: counts.aheadCount,
+    behindCount: counts.behindCount,
+    safeToDelete,
+    canDelete: true,
+    deleteByDefault: safeToDelete,
+    requiresForce: !safeToDelete,
+    decisionReason: safeToDelete
+      ? `No commits ahead of ${nextComparisonRef}. Selected by default.`
+      : `${formatCommitCount(counts.aheadCount)} ahead of ${nextComparisonRef}. Kept unchecked by default.`,
+  });
+}
+
 interface StatusLineCounts {
   statusEntries: string[];
   trackedChangeCount: number;
@@ -284,6 +433,33 @@ export async function removeWorktree(repoRoot: string, worktreePath: string): Pr
     worktreePath: resolvedWorktreePath,
     removed: result.code === 0 || alreadyMissing,
     alreadyMissing,
+    error: result.code === 0 || alreadyMissing ? "" : errorText,
+  };
+}
+
+export async function removeBranch(
+  repoRoot: string,
+  branchName: string,
+  options: { force?: boolean } = {},
+): Promise<BranchRemovalResult> {
+  const resolvedRepoRoot = await fs.realpath(repoRoot).catch(() => path.resolve(repoRoot));
+  const nextBranchName = String(branchName ?? "").trim();
+  const force = Boolean(options.force);
+  const result = await runCommand(
+    "git",
+    ["-C", resolvedRepoRoot, "branch", force ? "-D" : "-d", nextBranchName],
+    { allowFailure: true },
+  );
+  const errorText =
+    (result.stderr || result.stdout || "").trim() || "Failed to remove branch.";
+  const alreadyMissing =
+    /not found|unknown branch|not a valid branch|no such ref/i.test(errorText);
+
+  return {
+    branchName: nextBranchName,
+    removed: result.code === 0 || alreadyMissing,
+    alreadyMissing,
+    forced: force,
     error: result.code === 0 || alreadyMissing ? "" : errorText,
   };
 }

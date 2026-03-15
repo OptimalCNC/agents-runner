@@ -286,6 +286,40 @@ export interface WorktreeInspection {
   runIndex?: number;
 }
 
+export interface BatchDeleteWorktreePreviewEntry extends WorktreeInspection {
+  runId: string;
+}
+
+export interface BatchDeleteBranchPreviewEntry {
+  runId: string;
+  runIndex: number;
+  runTitle: string;
+  branchName: string;
+  comparisonRef: string | null;
+  exists: boolean;
+  aheadCount: number | null;
+  behindCount: number | null;
+  safeToDelete: boolean;
+  canDelete: boolean;
+  deleteByDefault: boolean;
+  requiresForce: boolean;
+  decisionReason: string;
+  error: string;
+}
+
+export interface BatchDeletePreview {
+  batchId: string;
+  worktreeCount: number;
+  dirtyWorktreeCount: number;
+  inspectFailureCount: number;
+  worktrees: BatchDeleteWorktreePreviewEntry[];
+  branchCount: number;
+  safeBranchCount: number;
+  riskyBranchCount: number;
+  branchInspectFailureCount: number;
+  branches: BatchDeleteBranchPreviewEntry[];
+}
+
 export interface AppConfig {
   homeDirectory: string;
   defaults: {

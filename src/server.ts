@@ -194,9 +194,19 @@ function normalizeCreateBatchPayload(body: Record<string, unknown>): NormalizedC
   };
 }
 
-function normalizeDeleteBatchPayload(body: Record<string, unknown>): { removeWorktrees: boolean } {
+function normalizeDeleteBatchPayload(body: Record<string, unknown>): { removeWorktrees: boolean; removeBranches: string[] } {
+  const removeWorktrees = Boolean(body.removeWorktrees);
+  const removeBranches = Array.isArray(body.removeBranches)
+    ? Array.from(new Set(
+      body.removeBranches
+        .map((value) => normalizeString(value))
+        .filter(Boolean),
+    ))
+    : [];
+
   return {
-    removeWorktrees: Boolean(body.removeWorktrees),
+    removeWorktrees,
+    removeBranches: removeWorktrees ? removeBranches : [],
   };
 }
 

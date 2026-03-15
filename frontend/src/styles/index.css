@@ -2730,6 +2730,16 @@ select {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.delete-dialog-preview-item.is-disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.delete-dialog-preview-item.is-selected {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .delete-dialog-preview-item-header {
   display: flex;
   align-items: baseline;
@@ -2753,6 +2763,48 @@ select {
   font-size: 11px;
   color: var(--text-tertiary);
   word-break: break-all;
+}
+
+.delete-dialog-branch-item {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.delete-dialog-branch-checkbox {
+  padding-top: 2px;
+}
+
+.delete-dialog-branch-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.delete-dialog-branch-checkbox input:disabled {
+  cursor: not-allowed;
+}
+
+.delete-dialog-branch-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.delete-dialog-branch-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.delete-dialog-branch-reason {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 
 /* ───────────────────── Toast ───────────────────── */

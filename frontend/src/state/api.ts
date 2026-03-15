@@ -1,6 +1,7 @@
 import type {
   AppConfig,
   Batch,
+  BatchDeletePreview,
   BatchSummary,
   CodexAuthValidationResponse,
   DirectoryListing,
@@ -77,15 +78,18 @@ export async function apiCancelBatch(batchId: string): Promise<void> {
   await fetchJson(`/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: "POST" });
 }
 
-export async function apiDeleteBatch(batchId: string, removeWorktrees: boolean): Promise<{ cleanup?: { removedCount: number } }> {
+export async function apiDeleteBatch(
+  batchId: string,
+  options: { removeWorktrees: boolean; removeBranches: string[] },
+): Promise<{ cleanup?: { worktrees?: { removedCount: number }; branches?: { removedCount: number } } }> {
   return fetchJson(`/api/batches/${encodeURIComponent(batchId)}`, {
     method: "DELETE",
-    body: JSON.stringify({ removeWorktrees }),
+    body: JSON.stringify(options),
   });
 }
 
-export async function apiGetDeletePreview(batchId: string): Promise<{ preview: { worktreeCount: number; worktrees: import("../types.js").WorktreeInspection[] } }> {
-  return fetchJson(`/api/batches/${encodeURIComponent(batchId)}/delete-preview`);
+export async function apiGetDeletePreview(batchId: string): Promise<{ preview: BatchDeletePreview }> {
+  return fetchJson<{ preview: BatchDeletePreview }>(`/api/batches/${encodeURIComponent(batchId)}/delete-preview`);
 }
 
 export async function apiGetRunReview(batchId: string, runId: string): Promise<{ review: RunReview }> {
