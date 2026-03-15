@@ -24,8 +24,28 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function createId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const SHORT_BATCH_ID_LENGTH = 5;
+
+export function createBatchId(existingBatchIds: ReadonlySet<string>): string {
+  for (let attempt = 0; attempt < 256; attempt += 1) {
+    const candidate = Math.floor(Math.random() * (36 ** SHORT_BATCH_ID_LENGTH))
+      .toString(36)
+      .padStart(SHORT_BATCH_ID_LENGTH, "0");
+
+    if (!existingBatchIds.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  while (true) {
+    const candidate = `${Date.now().toString(36)}${Math.floor(Math.random() * 36).toString(36)}`
+      .slice(-SHORT_BATCH_ID_LENGTH)
+      .padStart(SHORT_BATCH_ID_LENGTH, "0");
+
+    if (!existingBatchIds.has(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 function normalizeLoadedLog(log: RunLog, runId: string, index: number): RunLog {
@@ -430,7 +450,7 @@ export function createBatchStore(dataDirectory: string): BatchStore {
     title: string;
     config: BatchConfig;
   }): Batch {
-    const id = createId();
+    const id = createBatchId(new Set(batches.keys()));
     const batch: Batch = {
       id,
       mode,

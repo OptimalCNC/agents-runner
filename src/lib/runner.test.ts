@@ -2,21 +2,13 @@ import { expect, test } from "bun:test";
 
 import { createRunId } from "./runner";
 
-test("createRunId returns a five-character lowercase base36 id", () => {
-  const id = createRunId(new Set());
+test("createRunId returns a stable run id derived from the run index", () => {
+  const id = createRunId(0);
 
-  expect(id).toHaveLength(5);
-  expect(id).toMatch(/^[a-z0-9]{5}$/);
+  expect(id).toBe("run-1");
 });
 
-test("createRunId avoids ids already present in the provided set", () => {
-  const ids = new Set<string>();
-
-  for (let index = 0; index < 64; index += 1) {
-    const id = createRunId(ids);
-    expect(ids.has(id)).toBe(false);
-    ids.add(id);
-  }
-
-  expect(ids.size).toBe(64);
+test("createRunId increments with the run index", () => {
+  expect(createRunId(1)).toBe("run-2");
+  expect(createRunId(9)).toBe("run-10");
 });

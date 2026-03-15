@@ -6,6 +6,7 @@ import { useAppStore, selectSelectedBatch } from "../../state/store.js";
 import { apiContinueRun, apiCreateRunBranch, apiGetRunReview } from "../../state/api.js";
 import { GitIcon, PlayIcon, RefreshIcon } from "../../icons.js";
 import { splitDiff } from "../../utils/diffSplitter.js";
+import { buildDefaultReviewBranchName } from "../../utils/reviewBranch.js";
 import { isPendingRunStatus } from "../../utils/runStatus.js";
 
 interface Props {
@@ -29,13 +30,16 @@ export function ReviewTab({ run }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [creatingBranch, setCreatingBranch] = useState(false);
   const [requestingCommit, setRequestingCommit] = useState(false);
-  const [branchName, setBranchName] = useState(() => `batch/${run.id}`);
   const batch = useAppStore(selectSelectedBatch);
-  const defaultBranchName = `batch/${run.id}`;
+  const defaultBranchName = useMemo(
+    () => buildDefaultReviewBranchName(batch?.id, run.index),
+    [batch?.id, run.index],
+  );
+  const [branchName, setBranchName] = useState(defaultBranchName);
 
   useEffect(() => {
-    setBranchName(`batch/${run.id}`);
-  }, [run.id]);
+    setBranchName(defaultBranchName);
+  }, [defaultBranchName]);
 
   async function handleRefresh() {
     if (!batch) return;
