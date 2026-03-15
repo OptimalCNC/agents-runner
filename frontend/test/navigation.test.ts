@@ -124,6 +124,7 @@ describe("navigation state", () => {
     const parsed = parseNavigationSelection("?batch=batch-2&run=run-5&tab=review");
 
     expect(parsed).toEqual({
+      activeView: "batches",
       selectedBatchId: "batch-2",
       selectedRunId: "run-5",
       activeTab: "review",
@@ -131,18 +132,38 @@ describe("navigation state", () => {
     expect(buildNavigationSearch(parsed)).toBe("?batch=batch-2&run=run-5&tab=review");
   });
 
-  test("omits default session tab and ignores tab-only URLs without a batch", () => {
+  test("omits default batches view and ignores tab-only URLs without a batch", () => {
     expect(parseNavigationSelection("?tab=invalid")).toEqual({
+      activeView: "batches",
       selectedBatchId: null,
       selectedRunId: null,
       activeTab: "session",
     });
 
     expect(buildNavigationSearch({
+      activeView: "batches",
       selectedBatchId: null,
       selectedRunId: "run-1",
       activeTab: "review",
     })).toBe("");
+  });
+
+  test("supports a dedicated settings view in the URL", () => {
+    const parsed = parseNavigationSelection("?view=settings&batch=batch-2&run=run-5&tab=review");
+
+    expect(parsed).toEqual({
+      activeView: "settings",
+      selectedBatchId: "batch-2",
+      selectedRunId: "run-5",
+      activeTab: "review",
+    });
+
+    expect(buildNavigationSearch({
+      activeView: "settings",
+      selectedBatchId: null,
+      selectedRunId: null,
+      activeTab: "session",
+    })).toBe("?view=settings");
   });
 
   test("keeps requested run until the selected batch detail is loaded", () => {
@@ -150,6 +171,7 @@ describe("navigation state", () => {
     const reconciled = reconcileNavigationState({
       batches: [batchA],
       batchDetails: new Map(),
+      activeView: "batches",
       selectedBatchId: "batch-a",
       selectedRunId: "run-2",
       activeTab: "review",
@@ -157,6 +179,7 @@ describe("navigation state", () => {
     });
 
     expect(reconciled).toEqual({
+      activeView: "batches",
       selectedBatchId: "batch-a",
       selectedRunId: "run-2",
       activeTab: "review",
@@ -174,6 +197,7 @@ describe("navigation state", () => {
     const reconciled = reconcileNavigationState({
       batches: [batchA, batchB],
       batchDetails,
+      activeView: "settings",
       selectedBatchId: "missing-batch",
       selectedRunId: "missing-run",
       activeTab: "review",
@@ -181,6 +205,7 @@ describe("navigation state", () => {
     });
 
     expect(reconciled).toEqual({
+      activeView: "settings",
       selectedBatchId: "batch-a",
       selectedRunId: "run-a1",
       activeTab: "review",
@@ -197,6 +222,7 @@ describe("navigation state", () => {
     const reconciled = reconcileNavigationState({
       batches: [batchB],
       batchDetails,
+      activeView: "batches",
       selectedBatchId: "batch-b",
       selectedRunId: "run-missing",
       activeTab: "review",

@@ -236,6 +236,20 @@ export interface DirectoryListing {
   directories: DirectoryEntry[];
 }
 
+export type BundledMcpTransport = "streamable_http" | "stdio";
+
+export interface BundledMcpStatus {
+  serverName: string;
+  endpointPath: string;
+  endpointUrl: string;
+  configPath: string;
+  installed: boolean;
+  healthy: boolean;
+  transport: BundledMcpTransport | null;
+  configuredUrl: string | null;
+  error: string;
+}
+
 export interface ReasoningEffortEntry {
   reasoningEffort: string;
   description: string;

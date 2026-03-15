@@ -4,9 +4,11 @@ import type { AppConfig, BatchSummary, Batch, BatchDeletePreview, ProjectContext
 import { normalizeMode } from "../utils/format.js";
 import { buildProjectPathOptions, getProjectPath } from "../utils/paths.js";
 import {
+  type AppView,
   type NavigationState,
   type RunDetailTab,
   ensureSelectedBatchVisibleInFilters,
+  normalizeAppView,
   reconcileNavigationState,
   saveUiPreferences,
   syncNavigationSelectionToLocation,
@@ -53,6 +55,7 @@ interface AppState {
   config: AppConfig | null;
   batches: BatchSummary[];
   batchDetails: Map<string, Batch>;
+  activeView: AppView;
   selectedBatchId: string | null;
   selectedRunId: string | null;
   activeTab: RunDetailTab;
@@ -75,6 +78,7 @@ interface AppState {
   mergeBatchMeta: (batchId: string, batch: Omit<Batch, "runs">) => void;
   upsertRunInBatch: (batchId: string, run: Batch["runs"][number], summary?: BatchSummary) => void;
   hydrateNavigationState: (state: Partial<NavigationState>) => void;
+  selectView: (view: AppView) => void;
   selectBatch: (batchId: string | null) => void;
   selectRun: (runId: string | null) => void;
   selectTab: (tab: RunDetailTab) => void;
@@ -118,9 +122,10 @@ function sameStringArray(left: readonly string[], right: readonly string[]): boo
 }
 
 function buildPersistedUiState(
-  state: Pick<AppState, "selectedBatchId" | "selectedRunId" | "activeTab" | "projectFilters">,
+  state: Pick<AppState, "activeView" | "selectedBatchId" | "selectedRunId" | "activeTab" | "projectFilters">,
 ): NavigationState {
   return {
+    activeView: state.activeView,
     selectedBatchId: state.selectedBatchId,
     selectedRunId: state.selectedRunId,
     activeTab: state.activeTab,
@@ -129,9 +134,10 @@ function buildPersistedUiState(
 }
 
 function syncPersistedUiState(
-  state: Pick<AppState, "selectedBatchId" | "selectedRunId" | "activeTab" | "projectFilters">,
+  state: Pick<AppState, "activeView" | "selectedBatchId" | "selectedRunId" | "activeTab" | "projectFilters">,
 ): void {
   syncNavigationSelectionToLocation({
+    activeView: state.activeView,
     selectedBatchId: state.selectedBatchId,
     selectedRunId: state.selectedRunId,
     activeTab: state.activeTab,
@@ -162,6 +168,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   config: null,
   batches: [],
   batchDetails: new Map(),
+  activeView: "batches",
   selectedBatchId: null,
   selectedRunId: null,
   activeTab: "session",
@@ -288,6 +295,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   hydrateNavigationState: (navigationState) => {
     set((state) => ({
+      ...(navigationState.activeView !== undefined ? { activeView: normalizeAppView(navigationState.activeView) } : {}),
       ...(navigationState.selectedBatchId !== undefined ? { selectedBatchId: navigationState.selectedBatchId } : {}),
       ...(navigationState.selectedRunId !== undefined ? { selectedRunId: navigationState.selectedRunId } : {}),
       ...(navigationState.activeTab !== undefined ? { activeTab: navigationState.activeTab } : {}),
@@ -297,13 +305,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  selectView: (view) => {
+    const normalizedView = normalizeAppView(view);
+    if (get().activeView === normalizedView) {
+      return;
+    }
+
+    set({ activeView: normalizedView });
+
+    if (normalizedView === "batches") {
+      get().reconcileSelection();
+      return;
+    }
+
+    syncPersistedUiState(get());
+  },
+
   selectBatch: (batchId) => {
     const normalizedBatchId = String(batchId ?? "").trim() || null;
-    if (get().selectedBatchId === normalizedBatchId) {
+    const state = get();
+    if (state.selectedBatchId === normalizedBatchId && state.activeView === "batches") {
       return;
     }
 
     set({
+      activeView: "batches",
       selectedBatchId: normalizedBatchId,
       selectedRunId: null,
     });
@@ -312,20 +338,28 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   selectRun: (runId) => {
     const normalizedRunId = String(runId ?? "").trim() || null;
-    if (get().selectedRunId === normalizedRunId) {
+    const state = get();
+    if (state.selectedRunId === normalizedRunId && state.activeView === "batches") {
       return;
     }
 
-    set({ selectedRunId: normalizedRunId });
+    set({
+      activeView: "batches",
+      selectedRunId: normalizedRunId,
+    });
     get().reconcileSelection();
   },
 
   selectTab: (tab) => {
-    if (get().activeTab === tab) {
+    const state = get();
+    if (state.activeTab === tab && state.activeView === "batches") {
       return;
     }
 
-    set({ activeTab: tab });
+    set({
+      activeView: "batches",
+      activeTab: tab,
+    });
     syncPersistedUiState(get());
   },
 
@@ -341,6 +375,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       : state.projectFilters;
     const reconciled = reconcileNavigationState({
       ...buildPersistedUiState({
+        activeView: state.activeView,
         selectedBatchId: state.selectedBatchId,
         selectedRunId: state.selectedRunId,
         activeTab: state.activeTab,
@@ -352,11 +387,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (
       state.selectedBatchId !== reconciled.selectedBatchId
+      || state.activeView !== reconciled.activeView
       || state.selectedRunId !== reconciled.selectedRunId
       || state.activeTab !== reconciled.activeTab
       || !sameStringArray(state.projectFilters, reconciled.projectFilters)
     ) {
       set({
+        activeView: reconciled.activeView,
         selectedBatchId: reconciled.selectedBatchId,
         selectedRunId: reconciled.selectedRunId,
         activeTab: reconciled.activeTab,

@@ -1,11 +1,12 @@
 import { useAppStore } from "../state/store.js";
 import { useCodexAuthStore } from "../state/codexAuth.js";
-import { PlusIcon } from "../icons.js";
+import { PlusIcon, SettingsIcon } from "../icons.js";
 
 import type { CodexAuthState } from "../state/codexAuth.js";
 
 export function Navbar() {
   const conn = useAppStore((s) => s.connectionStatus);
+  const activeView = useAppStore((s) => s.activeView);
   const auth = useCodexAuthStore();
 
   const connLabel = conn === "connected" ? "Connected" : conn === "disconnected" ? "Disconnected" : "Connecting\u2026";
@@ -16,6 +17,10 @@ export function Navbar() {
   function handleNewBatch() {
     useAppStore.setState({ drawerOpen: true });
     document.body.style.overflow = "hidden";
+  }
+
+  function handleSelectView(view: "batches" | "settings") {
+    useAppStore.getState().selectView(view);
   }
 
   return (
@@ -33,6 +38,25 @@ export function Navbar() {
         </svg>
         <span className="navbar-title">Agents Runner</span>
         <span className="navbar-version">v0.1</span>
+        <div className="navbar-view-switch" aria-label="Primary navigation">
+          <button
+            className={`navbar-view-btn${activeView === "batches" ? " is-active" : ""}`}
+            type="button"
+            aria-current={activeView === "batches" ? "page" : undefined}
+            onClick={() => handleSelectView("batches")}
+          >
+            Batches
+          </button>
+          <button
+            className={`navbar-view-btn${activeView === "settings" ? " is-active" : ""}`}
+            type="button"
+            aria-current={activeView === "settings" ? "page" : undefined}
+            onClick={() => handleSelectView("settings")}
+          >
+            <SettingsIcon size={13} />
+            Settings
+          </button>
+        </div>
       </div>
       <div className="navbar-right">
         <div className="conn-status" id="connectionStatus">

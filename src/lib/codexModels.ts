@@ -36,7 +36,7 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-interface ResolvedBinary {
+export interface ResolvedBinary {
   binaryPath: string;
   pathEntries: string[];
 }
@@ -640,7 +640,7 @@ function normalizeModel(rawModel: Record<string, unknown>): CodexModel {
   };
 }
 
-function resolveCodexBinary({
+export function resolveCodexBinary({
   platform = process.platform,
   arch = process.arch,
 }: {
@@ -679,7 +679,7 @@ function resolveCodexBinary({
   };
 }
 
-function buildCodexEnvironment(baseEnv: NodeJS.ProcessEnv, pathEntries: string[]): NodeJS.ProcessEnv {
+export function buildCodexEnvironment(baseEnv: NodeJS.ProcessEnv, pathEntries: string[]): NodeJS.ProcessEnv {
   const env = { ...baseEnv };
   const pathSeparator = process.platform === "win32" ? ";" : ":";
   const existingPath = env.PATH || "";

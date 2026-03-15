@@ -340,6 +340,31 @@ export interface DirectoryListing {
   directories: DirectoryEntry[];
 }
 
+// --- MCP integration ---
+
+export type BundledMcpTransport = "streamable_http" | "stdio";
+
+export interface BundledMcpStatus {
+  serverName: string;
+  endpointPath: string;
+  endpointUrl: string;
+  configPath: string;
+  installed: boolean;
+  healthy: boolean;
+  transport: BundledMcpTransport | null;
+  configuredUrl: string | null;
+  error: string;
+}
+
+export interface CreateCommitToolResult {
+  workingFolder: string;
+  commitSha: string;
+  branch: string;
+  message: string;
+  stagedFiles: string[];
+  statSummary: string;
+}
+
 // --- Codex models ---
 
 export interface ReasoningEffortEntry {

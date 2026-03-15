@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DiffModeEnum, DiffView } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view-pure.css";
-import type { Run } from "../../types.js";
+import type { BundledMcpStatus, Run } from "../../types.js";
 import { useAppStore, selectSelectedBatch } from "../../state/store.js";
-import { apiContinueRun, apiCreateRunBranch, apiGetRunReview } from "../../state/api.js";
-import { GitIcon, PlayIcon, RefreshIcon } from "../../icons.js";
+import {
+  apiContinueRun,
+  apiCreateRunBranch,
+  apiGetBundledMcpStatus,
+  apiGetRunReview,
+  apiInstallBundledMcp,
+} from "../../state/api.js";
+import { AlertIcon, GitIcon, PlayIcon, RefreshIcon, WrenchIcon } from "../../icons.js";
 import { splitDiff } from "../../utils/diffSplitter.js";
 import { buildDefaultReviewBranchName } from "../../utils/reviewBranch.js";
 import { isPendingRunStatus } from "../../utils/runStatus.js";
@@ -13,16 +19,12 @@ interface Props {
   run: Run;
 }
 
-function buildCommitPrompt(filePaths: string[]): string {
-  const fileList = filePaths.length > 0
-    ? filePaths.map((filePath) => `- ${filePath}`).join("\n")
-    : "- Inspect the current git status to determine the changed files.";
-
+function buildCommitPrompt(): string {
   return [
-    "Please inspect the current git changes in this worktree, stage the files that belong to this run, and create exactly one commit.",
-    `Files currently shown in Review:\n${fileList}`,
-    "Use a concise, descriptive commit message based on the actual changes, not a placeholder.",
-    "After committing, reply with the commit SHA, the commit message, and note any files you intentionally left uncommitted.",
+    "Inspect the current git worktree yourself and create exactly one commit for the changes that belong together.",
+    "Resolve the git worktree root with `git rev-parse --show-toplevel`, choose the files for the commit, write the commit message, and then call the MCP tool `create_commit` exactly once.",
+    "Pass the git worktree root as `working_folder`, pass only the selected file paths in `files`, and do not run `git commit` directly yourself.",
+    "After the MCP tool succeeds, reply with the commit SHA, branch, commit message, and any files you intentionally left uncommitted.",
   ].join("\n\n");
 }
 
@@ -30,6 +32,11 @@ export function ReviewTab({ run }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [creatingBranch, setCreatingBranch] = useState(false);
   const [requestingCommit, setRequestingCommit] = useState(false);
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
+  const [mcpStatus, setMcpStatus] = useState<BundledMcpStatus | null>(null);
+  const [installingMcp, setInstallingMcp] = useState(false);
+  const [mcpInstallError, setMcpInstallError] = useState("");
+  const [resumeCommitAfterInstall, setResumeCommitAfterInstall] = useState(false);
   const batch = useAppStore(selectSelectedBatch);
   const defaultBranchName = useMemo(
     () => buildDefaultReviewBranchName(batch?.id, run.index),
@@ -73,11 +80,6 @@ export function ReviewTab({ run }: Props) {
       deletions: acc.deletions + file.deletions,
     }), { additions: 0, deletions: 0 });
   }, [files]);
-  const reviewFilePaths = useMemo(() => {
-    const trackedPaths = files.map((file) => file.fileName).filter(Boolean);
-    const untrackedPaths = (review?.untrackedFiles || []).map((file) => file.path).filter(Boolean);
-    return Array.from(new Set([...trackedPaths, ...untrackedPaths]));
-  }, [files, review?.untrackedFiles]);
   const hasLocalChanges = Boolean(review?.statusShort.trim());
   const runIsActive = isPendingRunStatus(run.status);
   const branchState = !review
@@ -123,13 +125,30 @@ export function ReviewTab({ run }: Props) {
         : !hasLocalChanges
           ? "No local git changes are currently shown for this worktree."
           : !review.currentBranch
-            ? `Creates ${branchName.trim() || defaultBranchName}, then asks Codex for one commit.`
-            : `Asks Codex for one commit on ${review.currentBranch}.`;
+            ? `Creates ${branchName.trim() || defaultBranchName}, then asks Codex to inspect the worktree and call the MCP commit tool once.`
+            : `Asks Codex to inspect the worktree and call the MCP commit tool once on ${review.currentBranch}.`;
   const commitButtonLabel = requestingCommit
     ? "Sending..."
     : review?.currentBranch
       ? "Ask Codex to Commit"
       : "Create Branch + Commit";
+
+  function openMcpDialog(nextStatus: BundledMcpStatus, continueCommit: boolean) {
+    setMcpStatus(nextStatus);
+    setResumeCommitAfterInstall(continueCommit);
+    setMcpInstallError("");
+    setMcpDialogOpen(true);
+  }
+
+  function closeMcpDialog() {
+    if (installingMcp) {
+      return;
+    }
+
+    setMcpDialogOpen(false);
+    setResumeCommitAfterInstall(false);
+    setMcpInstallError("");
+  }
 
   async function handleCreateBranch(event: React.FormEvent) {
     event.preventDefault();
@@ -150,7 +169,7 @@ export function ReviewTab({ run }: Props) {
     }
   }
 
-  async function handleRequestCommit() {
+  async function requestCommitWithReadyMcp() {
     if (!batch || !review || !hasLocalChanges || !canRequestCommit) {
       return;
     }
@@ -173,7 +192,7 @@ export function ReviewTab({ run }: Props) {
         branchWasCreated = true;
       }
 
-      const payload = await apiContinueRun(batch.id, run.id, buildCommitPrompt(reviewFilePaths));
+      const payload = await apiContinueRun(batch.id, run.id, buildCommitPrompt());
       useAppStore.getState().setBatchDetail(payload.batch);
       useAppStore.getState().selectTab("session");
       useAppStore.getState().addToast(
@@ -183,6 +202,65 @@ export function ReviewTab({ run }: Props) {
           ? `Switched this worktree to ${nextBranchName} and asked Codex to create the commit.`
           : "Codex is handling the commit in a new turn. Review will refresh when that turn finishes.",
       );
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async function handleInstallMcp() {
+    setInstallingMcp(true);
+    setMcpInstallError("");
+
+    try {
+      const payload = await apiInstallBundledMcp();
+      setMcpStatus(payload.status);
+
+      if (!payload.status.healthy) {
+        throw new Error(payload.status.error || "Agents Runner could not verify the MCP install.");
+      }
+
+      useAppStore.getState().addToast(
+        "success",
+        "Commit support installed",
+        `Codex can now reach ${payload.status.serverName} at ${payload.status.endpointUrl}.`,
+      );
+
+      setMcpDialogOpen(false);
+
+      if (resumeCommitAfterInstall) {
+        setResumeCommitAfterInstall(false);
+        setRequestingCommit(true);
+        try {
+          await requestCommitWithReadyMcp();
+        } catch (error) {
+          useAppStore.getState().addToast("error", "Commit request failed", (error as Error).message);
+        } finally {
+          setRequestingCommit(false);
+        }
+      }
+    } catch (error) {
+      setMcpInstallError((error as Error).message);
+    } finally {
+      setInstallingMcp(false);
+    }
+  }
+
+  async function handleRequestCommit() {
+    if (!batch || !review || !hasLocalChanges || !canRequestCommit) {
+      return;
+    }
+
+    setRequestingCommit(true);
+    try {
+      const payload = await apiGetBundledMcpStatus();
+      setMcpStatus(payload.status);
+
+      if (!payload.status.healthy) {
+        openMcpDialog(payload.status, true);
+        return;
+      }
+
+      await requestCommitWithReadyMcp();
     } catch (error) {
       useAppStore.getState().addToast("error", "Commit request failed", (error as Error).message);
     } finally {
@@ -337,6 +415,115 @@ export function ReviewTab({ run }: Props) {
           )}
         </>
       )}
+      <McpInstallDialog
+        isOpen={mcpDialogOpen}
+        status={mcpStatus}
+        submitting={installingMcp}
+        error={mcpInstallError}
+        continueAfterInstall={resumeCommitAfterInstall}
+        onClose={closeMcpDialog}
+        onInstall={handleInstallMcp}
+      />
     </div>
+  );
+}
+
+interface McpInstallDialogProps {
+  isOpen: boolean;
+  status: BundledMcpStatus | null;
+  submitting: boolean;
+  error: string;
+  continueAfterInstall: boolean;
+  onClose: () => void;
+  onInstall: () => void;
+}
+
+function McpInstallDialog({
+  isOpen,
+  status,
+  submitting,
+  error,
+  continueAfterInstall,
+  onClose,
+  onInstall,
+}: McpInstallDialogProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) {
+      return;
+    }
+
+    if (isOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!isOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [isOpen]);
+
+  const installLabel = submitting
+    ? (status?.installed ? "Repairing..." : "Installing...")
+    : continueAfterInstall
+      ? (status?.installed ? "Repair and Continue" : "Install and Continue")
+      : (status?.installed ? "Repair MCP" : "Install MCP");
+  const summary = !status
+    ? "Agents Runner needs to verify Codex commit-tool support before Review can create a commit."
+    : status.installed
+      ? status.error || `Codex already has ${status.serverName} configured, but it needs to point at ${status.endpointUrl}.`
+      : `Review commits use one global Codex MCP entry named ${status.serverName}. Installing it points Codex at ${status.endpointUrl}.`;
+
+  return (
+    <dialog ref={dialogRef} className="dialog" onClose={onClose}>
+      <form method="dialog" className="dialog-shell review-mcp-dialog-shell">
+        <div className="dialog-header">
+          <h3>Enable Review Commits</h3>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={onClose} disabled={submitting}>Close</button>
+        </div>
+
+        <div className="review-mcp-dialog-body">
+          <div className="review-mcp-dialog-lead">
+            <div className="review-mcp-dialog-icon">
+              {status?.installed ? <WrenchIcon size={18} /> : <AlertIcon size={18} />}
+            </div>
+            <div className="review-mcp-dialog-copy">
+              <div className="review-section-title">Global Codex MCP</div>
+              <p>{summary}</p>
+            </div>
+          </div>
+
+          {status && (
+            <div className="review-mcp-dialog-card">
+              <div className="review-mcp-dialog-row">
+                <span className="review-mcp-dialog-label">Server</span>
+                <span className="mono">{status.serverName}</span>
+              </div>
+              <div className="review-mcp-dialog-row">
+                <span className="review-mcp-dialog-label">Expected URL</span>
+                <span className="mono review-mcp-dialog-break">{status.endpointUrl}</span>
+              </div>
+              {status.configuredUrl && (
+                <div className="review-mcp-dialog-row">
+                  <span className="review-mcp-dialog-label">Current URL</span>
+                  <span className="mono review-mcp-dialog-break">{status.configuredUrl}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className={`review-mcp-dialog-hint${error ? " is-error" : ""}`}>
+            {error || "This only installs the bundled commit MCP entry that Review uses."}
+          </div>
+        </div>
+
+        <div className="dialog-footer">
+          <button className="btn btn-ghost" type="button" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button className="btn btn-primary" type="button" onClick={onInstall} disabled={submitting}>
+            <GitIcon size={13} />
+            {installLabel}
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }

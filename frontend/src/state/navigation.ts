@@ -3,10 +3,14 @@ import { getProjectPath } from "../utils/paths.js";
 
 const UI_PREFERENCES_STORAGE_KEY = "agents-runner:ui-prefs:v1";
 
+export const APP_VIEWS = ["batches", "settings"] as const;
+export type AppView = (typeof APP_VIEWS)[number];
+
 export const RUN_DETAIL_TABS = ["session", "review"] as const;
 export type RunDetailTab = (typeof RUN_DETAIL_TABS)[number];
 
 export interface NavigationSelectionState {
+  activeView: AppView;
   selectedBatchId: string | null;
   selectedRunId: string | null;
   activeTab: RunDetailTab;
@@ -44,6 +48,13 @@ function getStorage(storage?: Storage | null): Storage | null {
   }
 }
 
+export function normalizeAppView(value: unknown): AppView {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return APP_VIEWS.includes(normalized as AppView)
+    ? normalized as AppView
+    : "batches";
+}
+
 export function normalizeRunDetailTab(value: unknown): RunDetailTab {
   const normalized = String(value ?? "").trim().toLowerCase();
   return RUN_DETAIL_TABS.includes(normalized as RunDetailTab)
@@ -56,6 +67,7 @@ export function parseNavigationSelection(search: string): NavigationSelectionSta
   const params = new URLSearchParams(normalizedSearch);
 
   return {
+    activeView: normalizeAppView(params.get("view")),
     selectedBatchId: normalizeId(params.get("batch")),
     selectedRunId: normalizeId(params.get("run")),
     activeTab: normalizeRunDetailTab(params.get("tab")),
@@ -71,6 +83,10 @@ export function readNavigationSelectionFromLocation(
 
 export function buildNavigationSearch(state: NavigationSelectionState): string {
   const params = new URLSearchParams();
+
+  if (state.activeView !== "batches") {
+    params.set("view", state.activeView);
+  }
 
   if (state.selectedBatchId) {
     params.set("batch", state.selectedBatchId);
@@ -205,6 +221,7 @@ export function reconcileNavigationState(input: ReconcileNavigationInput): Navig
   }
 
   return {
+    activeView: normalizeAppView(input.activeView),
     selectedBatchId,
     selectedRunId,
     activeTab: normalizeRunDetailTab(input.activeTab),

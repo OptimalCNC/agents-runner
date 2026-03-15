@@ -3,6 +3,7 @@ import type {
   Batch,
   BatchDeletePreview,
   BatchSummary,
+  BundledMcpStatus,
   CodexAuthValidationResponse,
   DirectoryListing,
   ModelCatalogResponse,
@@ -116,4 +117,14 @@ export async function apiContinueRun(batchId: string, runId: string, prompt: str
       body: JSON.stringify({ prompt }),
     },
   );
+}
+
+export async function apiGetBundledMcpStatus(): Promise<{ status: BundledMcpStatus }> {
+  return fetchJson<{ status: BundledMcpStatus }>("/api/mcp/status");
+}
+
+export async function apiInstallBundledMcp(): Promise<{ status: BundledMcpStatus }> {
+  return fetchJson<{ status: BundledMcpStatus }>("/api/mcp/install", {
+    method: "POST",
+  });
 }
