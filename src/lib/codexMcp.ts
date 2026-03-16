@@ -7,8 +7,8 @@ import { runCommand } from "./process";
 
 import type { BundledMcpStatus, BundledMcpTransport } from "../types";
 
-const MCP_SERVER_NAME = "agents-runner-git";
-const MCP_ENDPOINT_PATH = "/mcp/git";
+const MCP_SERVER_NAME = "agents-runner-workflow";
+const MCP_ENDPOINT_PATH = "/mcp/workflow";
 
 interface McpServerConfigEntry {
   url: string | null;

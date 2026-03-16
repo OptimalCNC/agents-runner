@@ -1,7 +1,7 @@
 import { Suspense, lazy } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Run } from "../types.js";
-import { useAppStore } from "../state/store.js";
+import { useAppStore, selectSelectedBatch } from "../state/store.js";
 import type { RunDetailTab } from "../state/navigation.js";
 import { formatDate } from "../utils/format.js";
 import { StatusPill } from "./StatusPill.js";
@@ -41,7 +41,17 @@ function formatUsageSummary(run: Run): string {
 export function RunDetail({ run }: Props) {
   const [logsOpen, setLogsOpen] = useState(false);
   const selectedBatchId = useAppStore((state) => state.selectedBatchId);
+  const selectedBatch = useAppStore(selectSelectedBatch);
   const activePanel = useAppStore((state) => state.activeTab);
+
+  const rankedSessionReadOnly = selectedBatch?.mode === "ranked";
+  const showReviewPanel = run?.kind !== "reviewer";
+
+  useEffect(() => {
+    if (activePanel === "review" && !showReviewPanel) {
+      useAppStore.getState().selectTab("session");
+    }
+  }, [activePanel, showReviewPanel]);
 
   if (!run) {
     return (
@@ -66,7 +76,7 @@ export function RunDetail({ run }: Props) {
   const usageSummary = formatUsageSummary(run);
   const panels: { key: RunDetailTab; label: string }[] = [
     { key: "session", label: "Session" },
-    { key: "review", label: "Review" },
+    ...(showReviewPanel ? [{ key: "review", label: "Review" } as const] : []),
   ];
 
   return (
@@ -129,9 +139,9 @@ export function RunDetail({ run }: Props) {
 
       <div className="run-detail-content">
         {activePanel === "session" && selectedBatchId && (
-          <SessionPanel batchId={selectedBatchId} run={run} />
+          <SessionPanel batchId={selectedBatchId} run={run} readOnly={rankedSessionReadOnly} />
         )}
-        {activePanel === "review" && (
+        {activePanel === "review" && showReviewPanel && (
           <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading review...</div>}>
             <ReviewTab run={run} />
           </Suspense>

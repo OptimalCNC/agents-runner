@@ -12,6 +12,7 @@ import { StreamItemView, getStreamItemGroupMeta } from "./StreamItemView.js";
 interface Props {
   batchId: string;
   run: Run;
+  readOnly?: boolean;
 }
 
 type SessionItemEntry =
@@ -60,6 +61,14 @@ function buildOptimisticTurn(run: Run, prompt: string): RunTurn {
     usage: null,
     items: [],
   };
+}
+
+function formatCodexTurnConfig(turn: RunTurn): string {
+  if (!turn.codexConfig) {
+    return "";
+  }
+
+  return JSON.stringify(turn.codexConfig, null, 2);
 }
 
 function getTurnPlaceholder(status: RunTurn["status"], isSubmitting: boolean): string {
@@ -161,7 +170,7 @@ function ToolGroup({ items }: { items: StreamItem[] }) {
   );
 }
 
-export function SessionPanel({ batchId, run }: Props) {
+export function SessionPanel({ batchId, run, readOnly = false }: Props) {
   const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<RunTurn | null>(null);
@@ -180,7 +189,7 @@ export function SessionPanel({ batchId, run }: Props) {
   }, [pendingTurn, submitting, turns]);
   const isRunnable = canContinueRun(run);
   const isRunActive = isPendingRunStatus(run.status);
-  const composerDisabled = submitting || isRunActive || !Boolean(run.threadId && run.workingDirectory);
+  const composerDisabled = readOnly || submitting || isRunActive || !Boolean(run.threadId && run.workingDirectory);
   const submitLabel = submitting ? "Sending..." : isRunActive ? "Working..." : "Continue Run";
 
   useEffect(() => {
@@ -248,6 +257,31 @@ export function SessionPanel({ batchId, run }: Props) {
                     </span>
                   </div>
 
+                  {turn.codexConfig && (
+                    <details className="tx-collapsible tx-collapsible-config">
+                      <summary>
+                        <div className="tx-collapsible-summary">
+                          <span className="tx-collapsible-chevron">
+                            <ChevronRightIcon size={13} />
+                          </span>
+                          <span className="tx-collapsible-copy">
+                            <span className="tx-collapsible-label">Config</span>
+                            <span className="tx-collapsible-title">Codex launch settings for this turn</span>
+                          </span>
+                          <span className="tx-collapsible-badges">
+                            <span className="tx-collapsible-badge">{turn.codexConfig.launchMode}</span>
+                            {turn.codexConfig.developerPrompt && (
+                              <span className="tx-collapsible-badge">developer prompt</span>
+                            )}
+                          </span>
+                        </div>
+                      </summary>
+                      <div className="tx-collapsible-body">
+                        <pre className="code-block tx-config-block">{formatCodexTurnConfig(turn)}</pre>
+                      </div>
+                    </details>
+                  )}
+
                   {turn.items.length === 0 ? (
                     <div className="tx-agent-placeholder">
                       {getTurnPlaceholder(turn.status, submitting && pendingTurn?.id === turn.id)}
@@ -272,38 +306,40 @@ export function SessionPanel({ batchId, run }: Props) {
         </div>
       </div>
 
-      <form className="session-composer" onSubmit={handleSubmit}>
-        <div className="session-composer-shell">
-          <textarea
-            className="session-textarea"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder={
-              submitting
-                ? "Sending follow-up to Codex..."
-                : isRunnable
-                ? "Send a follow-up message to continue this run..."
-                : isPendingRunStatus(run.status)
-                ? "Wait for the current turn to finish before sending another message."
-                : "This run cannot be continued until it has a thread and working directory."
-            }
-            rows={4}
-            disabled={composerDisabled}
-          />
-          <div className="session-composer-footer">
-            <div className="session-composer-hint">
-              {run.workingDirectory || "No working directory yet."}
+      {!readOnly && (
+        <form className="session-composer" onSubmit={handleSubmit}>
+          <div className="session-composer-shell">
+            <textarea
+              className="session-textarea"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder={
+                submitting
+                  ? "Sending follow-up to Codex..."
+                  : isRunnable
+                  ? "Send a follow-up message to continue this run..."
+                  : isPendingRunStatus(run.status)
+                  ? "Wait for the current turn to finish before sending another message."
+                  : "This run cannot be continued until it has a thread and working directory."
+              }
+              rows={4}
+              disabled={composerDisabled}
+            />
+            <div className="session-composer-footer">
+              <div className="session-composer-hint">
+                {run.workingDirectory || "No working directory yet."}
+              </div>
+              <button
+                className="btn btn-primary session-submit"
+                type="submit"
+                disabled={composerDisabled || !prompt.trim()}
+              >
+                <PlayIcon size={12} /> {submitLabel}
+              </button>
             </div>
-            <button
-              className="btn btn-primary session-submit"
-              type="submit"
-              disabled={composerDisabled || !prompt.trim()}
-            >
-              <PlayIcon size={12} /> {submitLabel}
-            </button>
           </div>
-        </div>
-      </form>
+        </form>
+      )}
     </section>
   );
 }

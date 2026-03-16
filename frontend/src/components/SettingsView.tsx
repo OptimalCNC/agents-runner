@@ -156,7 +156,7 @@ export function SettingsView() {
             <div>
               <h2>Bundled Git MCP</h2>
               <p>
-                Review installs one global Codex MCP entry named <span className="mono">{status?.serverName || "agents-runner-git"}</span>.
+                Review installs one global Codex MCP entry named <span className="mono">{status?.serverName || "agents-runner-workflow"}</span>.
                 It points back to this Agents Runner instance so Codex can create commits without broader sandbox access.
               </p>
             </div>
