@@ -547,40 +547,52 @@ function buildReviewPrompt(batch: Batch, candidateRun: Run): string {
     "",
     `Candidate branch: ${candidateBranch}`,
     `Base branch: ${baseBranch}`,
-    "Return strict JSON only in this format:",
-    '{"score":0,"reason":"..."}',
-    "Score range: 0..100.",
   ].join("\n");
 }
 
-function extractReviewerScore(reviewRun: Run): number | null {
-  if (!reviewRun.finalResponse) {
-    return null;
-  }
+function buildReviewerDeveloperInstructions(reviewedRunId: string): string {
+  return [
+    "You must submit your score through MCP tool agents-runner-git.submit_score exactly once.",
+    `- reviewed_run_id must be ${reviewedRunId}.`,
+    "- working_folder must be the worktree root from `git rev-parse --show-toplevel`.",
+    "- score must be between 0 and 100.",
+    "- reason must be concise and specific.",
+    "After calling submit_score, provide a brief human-readable summary.",
+  ].join("\n");
+}
 
-  try {
-    const parsed = JSON.parse(reviewRun.finalResponse) as {
-      score?: unknown;
-      scores?: Array<{ runId?: string; score?: unknown }>;
-    };
+function extractReviewerScoreFromMcp(reviewRun: Run): number | null {
+  for (let turnIndex = reviewRun.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = reviewRun.turns[turnIndex];
+    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = turn.items[itemIndex] as Record<string, unknown>;
+      if (item.type !== "mcp_tool_call") {
+        continue;
+      }
 
-    const directScore = normalizeNumericScore(parsed.score);
-    if (directScore !== null) {
-      return directScore;
+      if (String(item.server ?? "") !== "agents-runner-git" || String(item.tool ?? "") !== "submit_score") {
+        continue;
+      }
+
+      if (String(item.status ?? "") !== "completed") {
+        continue;
+      }
+
+      const result = item.result as Record<string, unknown> | undefined;
+      const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
+      const score = normalizeNumericScore(structured?.score);
+      if (score !== null) {
+        return score;
+      }
     }
-
-    const fallbackEntry = Array.isArray(parsed.scores)
-      ? parsed.scores.find((entry) => String(entry.runId ?? "").trim() === String(reviewRun.reviewedRunId ?? "").trim())
-      : null;
-
-    return normalizeNumericScore(fallbackEntry?.score);
-  } catch {
-    return null;
   }
+
+  return null;
 }
 
 function applyCandidateScores(store: BatchStore, batchId: string, reviewRuns: Run[]): void {
   const scoreMap = new Map<string, number[]>();
+  const reviewerScoreMap = new Map<string, number>();
 
   for (const reviewRun of reviewRuns) {
     const reviewedRunId = String(reviewRun.reviewedRunId ?? "").trim();
@@ -588,10 +600,12 @@ function applyCandidateScores(store: BatchStore, batchId: string, reviewRuns: Ru
       continue;
     }
 
-    const score = extractReviewerScore(reviewRun);
+    const score = extractReviewerScoreFromMcp(reviewRun);
     if (score === null) {
       continue;
     }
+
+    reviewerScoreMap.set(reviewRun.id, score);
 
     if (!scoreMap.has(reviewedRunId)) {
       scoreMap.set(reviewedRunId, []);
@@ -600,6 +614,12 @@ function applyCandidateScores(store: BatchStore, batchId: string, reviewRuns: Ru
   }
 
   store.updateBatch(batchId, (batch) => {
+    for (const run of batch.runs) {
+      if (run.kind === "reviewer") {
+        run.score = reviewerScoreMap.get(run.id) ?? null;
+      }
+    }
+
     const candidateRuns = batch.runs.filter((run) => run.kind !== "reviewer");
 
     for (const run of candidateRuns) {
@@ -1033,6 +1053,7 @@ interface ExecuteRunOptions {
   sandboxModeOverride?: "workspace-write" | "read-only" | "danger-full-access";
   workingDirectoryOverride?: string;
   autoCreateBranch?: boolean;
+  developerInstructions?: string;
 }
 
 async function executeRun(
@@ -1114,8 +1135,10 @@ async function executeRun(
       });
     }
 
-    const codexConfig = createdBranchName
-      ? { developer_instructions: buildCandidateDeveloperInstructions(createdBranchName) }
+    const developerInstructions = options.developerInstructions
+      || (createdBranchName ? buildCandidateDeveloperInstructions(createdBranchName) : "");
+    const codexConfig = developerInstructions
+      ? { developer_instructions: developerInstructions }
       : {};
     const codex = getCodexClient(codexConfig);
     const thread = codex.startThread({
@@ -1300,6 +1323,7 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
           sandboxModeOverride: "read-only",
           workingDirectoryOverride: reviewedWorkingDirectory,
           promptOverride: run.prompt,
+          developerInstructions: buildReviewerDeveloperInstructions(String(run.reviewedRunId ?? "")),
         });
       });
 

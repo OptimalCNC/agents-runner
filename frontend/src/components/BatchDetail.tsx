@@ -26,45 +26,31 @@ function normalizeScore(value: unknown): number | null {
 function parseReviewerGlance(run: Run): ReviewerGlance {
   const fallbackScore = typeof run.score === "number" ? run.score : null;
 
-  if (!run.finalResponse) {
-    return {
-      run,
-      score: fallbackScore,
-      reason: "",
-    };
-  }
+  for (let turnIndex = run.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = run.turns[turnIndex];
+    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = turn.items[itemIndex] as Record<string, unknown>;
+      if (item.type !== "mcp_tool_call") {
+        continue;
+      }
 
-  try {
-    const parsed = JSON.parse(run.finalResponse) as {
-      score?: unknown;
-      reason?: unknown;
-      scores?: Array<{ score?: unknown; reason?: unknown }>;
-    };
+      if (String(item.server ?? "") !== "agents-runner-git" || String(item.tool ?? "") !== "submit_score") {
+        continue;
+      }
 
-    const directScore = normalizeScore(parsed.score);
-    const directReason = String(parsed.reason ?? "").trim();
-
-    if (directScore !== null || directReason) {
-      return {
-        run,
-        score: directScore ?? fallbackScore,
-        reason: directReason,
-      };
+      const result = item.result as Record<string, unknown> | undefined;
+      const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
+      const score = normalizeScore(structured?.score) ?? fallbackScore;
+      const reason = String(structured?.reason ?? "").trim();
+      return { run, score, reason };
     }
-
-    const firstLegacy = Array.isArray(parsed.scores) ? parsed.scores[0] : null;
-    return {
-      run,
-      score: normalizeScore(firstLegacy?.score) ?? fallbackScore,
-      reason: String(firstLegacy?.reason ?? "").trim(),
-    };
-  } catch {
-    return {
-      run,
-      score: fallbackScore,
-      reason: "",
-    };
   }
+
+  if (!run.finalResponse) {
+    return { run, score: fallbackScore, reason: "" };
+  }
+
+  return { run, score: fallbackScore, reason: run.finalResponse.trim() };
 }
 
 function buildRunsSummaryLabel(batch: { mode: string; runs: Run[]; config: { runCount: number } }): string {

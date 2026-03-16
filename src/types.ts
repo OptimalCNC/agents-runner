@@ -371,6 +371,13 @@ export interface CreateCommitToolResult {
   statSummary: string;
 }
 
+export interface SubmitScoreToolResult {
+  workingFolder: string;
+  reviewedRunId: string;
+  score: number;
+  reason: string;
+}
+
 // --- Codex models ---
 
 export interface ReasoningEffortEntry {
