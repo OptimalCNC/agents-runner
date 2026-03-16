@@ -134,10 +134,11 @@ function appendLog(run: Run, level: string, message: string): void {
   }
 }
 
-function getCodexClient(): InstanceType<typeof Codex> {
+function getCodexClient(config: Record<string, unknown> = {}): InstanceType<typeof Codex> {
   return new Codex({
     apiKey: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
     baseUrl: process.env.OPENAI_BASE_URL || process.env.CODEX_BASE_URL,
+    config: config as never,
   });
 }
 
@@ -523,16 +524,14 @@ function normalizeNumericScore(value: unknown): number | null {
   return Math.max(0, Math.min(100, parsed));
 }
 
-function buildAutoCommitPrompt(prompt: string, branchName: string): string {
+function buildCandidateDeveloperInstructions(branchName: string): string {
   return [
-    prompt.trim(),
-    "",
-    "IMPORTANT GIT WORKFLOW:",
+    "Follow this git workflow exactly:",
     `- Use branch ${branchName}.`,
-    "- Implement the task and finalize with exactly one commit.",
-    "- Use the MCP server \"agents-runner-git\" tool \"create_commit\" to create that commit.",
+    "- Produce exactly one commit for this run.",
+    "- Use the MCP server \"agents-runner-git\" tool \"create_commit\" to create the commit.",
     "- Do not run git commit directly.",
-    "- For create_commit.working_folder, use the worktree root from `git rev-parse --show-toplevel`.",
+    "- For create_commit.working_folder, pass the worktree root from `git rev-parse --show-toplevel`.",
     "- For create_commit.files, include only files relevant to this task.",
     "- For create_commit.message, provide a concise commit message.",
     "- In your final response, include the branch name and commit SHA.",
@@ -1115,7 +1114,10 @@ async function executeRun(
       });
     }
 
-    const codex = getCodexClient();
+    const codexConfig = createdBranchName
+      ? { developer_instructions: buildCandidateDeveloperInstructions(createdBranchName) }
+      : {};
+    const codex = getCodexClient(codexConfig);
     const thread = codex.startThread({
       model: batch.config.model || undefined,
       sandboxMode: options.sandboxModeOverride || batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
@@ -1127,7 +1129,7 @@ async function executeRun(
       modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
     });
 
-    const runPrompt = options.promptOverride || (createdBranchName ? buildAutoCommitPrompt(runSnapshot.prompt, createdBranchName) : runSnapshot.prompt);
+    const runPrompt = options.promptOverride || runSnapshot.prompt;
     const { events } = await thread.runStreamed(runPrompt, {
       signal: controller.signal,
     });
