@@ -34,7 +34,7 @@ function parseReviewerGlance(run: Run): ReviewerGlance {
         continue;
       }
 
-      if (String(item.server ?? "") !== "agents-runner-git" || String(item.tool ?? "") !== "submit_score") {
+      if (String(item.server ?? "") !== "agents-runner-workflow" || String(item.tool ?? "") !== "submit_score") {
         continue;
       }
 

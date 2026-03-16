@@ -4,13 +4,13 @@ import {
   createManagedWorktreeCommit,
   collectManagedWorktrees,
   negotiateMcpProtocolVersion,
-  submitManagedRunScore,
 } from "../lib/mcpGit";
+import { submitManagedRunScore } from "../lib/mcpReview";
 
 import type { ServerContext } from "./context";
 
 const JSON_RPC_VERSION = "2.0";
-const MCP_SERVER_NAME = "agents-runner-git";
+const MCP_SERVER_NAME = "agents-runner-workflow";
 const MCP_TOOL_NAME_CREATE_COMMIT = "create_commit";
 const MCP_TOOL_NAME_SUBMIT_SCORE = "submit_score";
 const MCP_SESSION_HEADER = "mcp-session-id";
@@ -303,7 +303,7 @@ export async function handleMcpRequest(
   response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
-  if (url.pathname !== "/mcp/git") {
+  if (url.pathname !== "/mcp/workflow") {
     return false;
   }
 

@@ -529,7 +529,7 @@ function buildCandidateDeveloperInstructions(branchName: string): string {
     "Follow this git workflow exactly:",
     `- Use branch ${branchName}.`,
     "- Produce exactly one commit for this run.",
-    "- Use the MCP server \"agents-runner-git\" tool \"create_commit\" to create the commit.",
+    "- Use the MCP server \"agents-runner-workflow\" tool \"create_commit\" to create the commit.",
     "- Do not run git commit directly.",
     "- For create_commit.working_folder, pass the worktree root from `git rev-parse --show-toplevel`.",
     "- For create_commit.files, include only files relevant to this task.",
@@ -552,7 +552,7 @@ function buildReviewPrompt(batch: Batch, candidateRun: Run): string {
 
 function buildReviewerDeveloperInstructions(reviewedRunId: string): string {
   return [
-    "You must submit your score through MCP tool agents-runner-git.submit_score exactly once.",
+    "You must submit your score through MCP tool agents-runner-workflow.submit_score exactly once.",
     `- reviewed_run_id must be ${reviewedRunId}.`,
     "- working_folder must be the worktree root from `git rev-parse --show-toplevel`.",
     "- score must be between 0 and 100.",
@@ -570,7 +570,7 @@ function extractReviewerScoreFromMcp(reviewRun: Run): number | null {
         continue;
       }
 
-      if (String(item.server ?? "") !== "agents-runner-git" || String(item.tool ?? "") !== "submit_score") {
+      if (String(item.server ?? "") !== "agents-runner-workflow" || String(item.tool ?? "") !== "submit_score") {
         continue;
       }
 
@@ -588,6 +588,16 @@ function extractReviewerScoreFromMcp(reviewRun: Run): number | null {
   }
 
   return null;
+}
+
+function recomputeRankedScores(store: BatchStore, batchId: string): void {
+  const batch = store.getBatch(batchId);
+  if (!batch || batch.mode !== "ranked") {
+    return;
+  }
+
+  const reviewerRuns = batch.runs.filter((run) => run.kind === "reviewer");
+  applyCandidateScores(store, batchId, reviewerRuns);
 }
 
 function applyCandidateScores(store: BatchStore, batchId: string, reviewRuns: Run[]): void {
@@ -900,6 +910,8 @@ async function streamTurnEvents(
   events: AsyncIterable<unknown>,
 ): Promise<void> {
   for await (const event of events) {
+    let shouldRecomputeRankedScores = false;
+
     store.updateRun(batchId, runId, (run) => {
       const turn = getRunTurn(run, turnId);
       if (!turn) {
@@ -942,16 +954,29 @@ async function streamTurnEvents(
         case "item.updated":
           upsertItemList(turn.items, evt.item);
           break;
-        case "item.completed":
+        case "item.completed": {
           upsertItemList(turn.items, evt.item);
-          if ((evt.item as Record<string, unknown>).type === "agent_message") {
-            turn.finalResponse = truncateText((evt.item as Record<string, unknown>).text ?? "");
+          const completedItem = evt.item as Record<string, unknown>;
+
+          if (completedItem.type === "agent_message") {
+            turn.finalResponse = truncateText(completedItem.text ?? "");
           }
-          if ((evt.item as Record<string, unknown>).type === "error") {
-            turn.error = (evt.item as Record<string, unknown>).message as string;
+          if (completedItem.type === "error") {
+            turn.error = completedItem.message as string;
           }
-          appendLog(run, "info", describeItem(evt.item as Record<string, unknown>));
+
+          if (
+            completedItem.type === "mcp_tool_call"
+            && String(completedItem.server ?? "") === "agents-runner-workflow"
+            && String(completedItem.tool ?? "") === "submit_score"
+            && String(completedItem.status ?? "") === "completed"
+          ) {
+            shouldRecomputeRankedScores = true;
+          }
+
+          appendLog(run, "info", describeItem(completedItem));
           break;
+        }
         case "error":
           turn.status = "failed";
           turn.error = evt.message as string;
@@ -963,6 +988,10 @@ async function streamTurnEvents(
 
       syncRunDerivedState(run);
     });
+
+    if (shouldRecomputeRankedScores) {
+      recomputeRankedScores(store, batchId);
+    }
   }
 }
 
