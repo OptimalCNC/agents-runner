@@ -849,12 +849,13 @@ async function refreshRunReview(
   batchId: string,
   runId: string,
   worktreePath: string | null,
+  baseRef: string | null,
 ): Promise<void> {
   if (!worktreePath) {
     return;
   }
 
-  const review = await collectWorktreeReview(worktreePath).catch(() => null);
+  const review = await collectWorktreeReview(worktreePath, baseRef).catch(() => null);
   if (!review) {
     return;
   }
@@ -895,7 +896,7 @@ export async function createRunBranch(
   }
 
   await createWorktreeBranch(runSnapshot.worktreePath, nextBranchName);
-  const review = await collectWorktreeReview(runSnapshot.worktreePath).catch(() => null);
+  const review = await collectWorktreeReview(runSnapshot.worktreePath, runSnapshot.baseRef).catch(() => null);
 
   store.updateRun(batchId, runId, (run) => {
     run.review = review ?? {
@@ -1002,7 +1003,7 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
     });
 
     releaseRunExecution(store, batchId, runId, execution);
-    void refreshRunReview(store, batchId, runId, worktreePath);
+    void refreshRunReview(store, batchId, runId, worktreePath, baseRef);
     return;
   } catch (error) {
     const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
@@ -1020,7 +1021,7 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
       syncRunDerivedState(run);
     });
     releaseRunExecution(store, batchId, runId, execution);
-    void refreshRunReview(store, batchId, runId, worktreePath);
+    void refreshRunReview(store, batchId, runId, worktreePath, baseRef);
     return;
   } finally {
     if (execution.runControllers.has(runId)) {
@@ -1152,6 +1153,7 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
   const threadId = runSnapshot.threadId;
   const workingDirectory = runSnapshot.workingDirectory;
   const worktreePath = runSnapshot.worktreePath;
+  const baseRef = runSnapshot.baseRef;
 
   const execution = getExecutionState(batchId);
   if (execution.runControllers.has(runId)) {
@@ -1214,7 +1216,7 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
       });
 
       releaseRunExecution(store, batchId, runId, execution);
-      void refreshRunReview(store, batchId, runId, worktreePath);
+      void refreshRunReview(store, batchId, runId, worktreePath, baseRef);
       return;
     } catch (error) {
       const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
@@ -1233,7 +1235,7 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
       });
 
       releaseRunExecution(store, batchId, runId, execution);
-      void refreshRunReview(store, batchId, runId, worktreePath);
+      void refreshRunReview(store, batchId, runId, worktreePath, baseRef);
       return;
     } finally {
       if (execution.runControllers.has(runId)) {
