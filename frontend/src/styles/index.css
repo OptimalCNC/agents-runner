@@ -3383,3 +3383,109 @@ select {
     white-space: normal;
   }
 }
+
+.ranked-candidate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+
+.ranked-candidate-item {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.ranked-candidate-item .run-card {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.ranked-candidate-item .run-card:hover {
+  background: var(--bg-elevated);
+}
+
+.ranked-review-glance {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  background: color-mix(in srgb, var(--bg-raised) 85%, black 15%);
+}
+
+.ranked-review-glance-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ranked-review-glance-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ranked-review-glance-count {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ranked-review-glance-list {
+  display: grid;
+  gap: 6px;
+}
+
+.ranked-review-glance-item {
+  border: 1px solid var(--border);
+  background: var(--bg-overlay);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+}
+
+.ranked-review-glance-item:hover {
+  border-color: var(--border-strong);
+}
+
+.ranked-review-glance-item-score {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ranked-review-glance-item-reason {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ranked-review-empty {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ranked-reviewer-details {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px;
+}
+
+.ranked-reviewer-details > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ranked-reviewer-grid {
+  margin-top: 10px;
+}

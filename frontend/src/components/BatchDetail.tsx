@@ -6,6 +6,76 @@ import { RunDetail } from "./RunDetail.js";
 import { ClockIcon, FolderIcon, GitIcon, XIcon, PlayIcon } from "../icons.js";
 import { formatDate, formatRelative, formatModeLabel } from "../utils/format.js";
 import { summarizeRunCounts } from "../utils/runStatus.js";
+import type { Run } from "../types.js";
+
+interface ReviewerGlance {
+  run: Run;
+  score: number | null;
+  reason: string;
+}
+
+function normalizeScore(value: unknown): number | null {
+  const parsed = Number(String(value ?? "").trim());
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function parseReviewerGlance(run: Run): ReviewerGlance {
+  const fallbackScore = typeof run.score === "number" ? run.score : null;
+
+  if (!run.finalResponse) {
+    return {
+      run,
+      score: fallbackScore,
+      reason: "",
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(run.finalResponse) as {
+      score?: unknown;
+      reason?: unknown;
+      scores?: Array<{ score?: unknown; reason?: unknown }>;
+    };
+
+    const directScore = normalizeScore(parsed.score);
+    const directReason = String(parsed.reason ?? "").trim();
+
+    if (directScore !== null || directReason) {
+      return {
+        run,
+        score: directScore ?? fallbackScore,
+        reason: directReason,
+      };
+    }
+
+    const firstLegacy = Array.isArray(parsed.scores) ? parsed.scores[0] : null;
+    return {
+      run,
+      score: normalizeScore(firstLegacy?.score) ?? fallbackScore,
+      reason: String(firstLegacy?.reason ?? "").trim(),
+    };
+  } catch {
+    return {
+      run,
+      score: fallbackScore,
+      reason: "",
+    };
+  }
+}
+
+function buildRunsSummaryLabel(batch: { mode: string; runs: Run[]; config: { runCount: number } }): string {
+  if (batch.mode !== "ranked") {
+    return `${batch.runs.length} / ${batch.config.runCount}`;
+  }
+
+  const candidateCount = batch.runs.filter((run) => run.kind !== "reviewer").length;
+  const reviewerCount = batch.runs.filter((run) => run.kind === "reviewer").length;
+  return `${candidateCount} candidates · ${reviewerCount} reviews`;
+}
 
 export function BatchDetail() {
   const batch = useAppStore(selectSelectedBatch);
@@ -40,6 +110,39 @@ export function BatchDetail() {
   const waitingForCodexRuns = batch.runs.filter((r) => r.status === "waiting_for_codex").length;
   const runningRuns = batch.runs.filter((r) => r.status === "running").length;
   const queuedRuns = batch.runs.filter((r) => r.status === "queued").length;
+
+  const candidateRuns = batch.runs
+    .filter((run) => run.kind !== "reviewer")
+    .sort((left, right) => {
+      if (left.rank && right.rank) {
+        return left.rank - right.rank;
+      }
+
+      if (left.rank) {
+        return -1;
+      }
+
+      if (right.rank) {
+        return 1;
+      }
+
+      return Number(right.score ?? -1) - Number(left.score ?? -1);
+    });
+
+  const reviewerRuns = batch.runs.filter((run) => run.kind === "reviewer");
+  const reviewerByCandidate = new Map<string, ReviewerGlance[]>();
+  for (const reviewRun of reviewerRuns) {
+    const targetRunId = String(reviewRun.reviewedRunId ?? "").trim();
+    if (!targetRunId) {
+      continue;
+    }
+
+    if (!reviewerByCandidate.has(targetRunId)) {
+      reviewerByCandidate.set(targetRunId, []);
+    }
+
+    reviewerByCandidate.get(targetRunId)!.push(parseReviewerGlance(reviewRun));
+  }
 
   async function handleCancel() {
     try {
@@ -86,7 +189,7 @@ export function BatchDetail() {
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Runs</span>
-          <span className="meta-item-value">{batch.runs.length} / {batch.config.runCount}</span>
+          <span className="meta-item-value">{buildRunsSummaryLabel(batch)}</span>
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Concurrency</span>
@@ -160,6 +263,60 @@ export function BatchDetail() {
             <p className="empty-title">Waiting for runs</p>
             <p className="empty-desc">Work items appear once the batch creates them.</p>
           </div>
+        ) : batch.mode === "ranked" ? (
+          <>
+            <div className="ranked-candidate-grid">
+              {candidateRuns.map((candidateRun) => {
+                const glanceEntries = (reviewerByCandidate.get(candidateRun.id) || [])
+                  .sort((left, right) => Number(right.score ?? -1) - Number(left.score ?? -1));
+                const previewEntries = glanceEntries.slice(0, 2);
+
+                return (
+                  <div key={candidateRun.id} className="ranked-candidate-item">
+                    <RunCard run={candidateRun} />
+                    <div className="ranked-review-glance">
+                      <div className="ranked-review-glance-header">
+                        <span className="ranked-review-glance-title">Reviewer glance</span>
+                        <span className="ranked-review-glance-count">{glanceEntries.length} reviews</span>
+                      </div>
+                      {previewEntries.length === 0 ? (
+                        <div className="ranked-review-empty">No reviewer summary yet.</div>
+                      ) : (
+                        <div className="ranked-review-glance-list">
+                          {previewEntries.map((entry) => (
+                            <button
+                              key={entry.run.id}
+                              className="ranked-review-glance-item"
+                              type="button"
+                              onClick={() => useAppStore.getState().selectRun(entry.run.id)}
+                            >
+                              <span className="ranked-review-glance-item-score">
+                                {entry.score === null ? "No score" : `Score ${entry.score}`}
+                              </span>
+                              <span className="ranked-review-glance-item-reason">
+                                {entry.reason || "Open reviewer run for details."}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {reviewerRuns.length > 0 && (
+              <details className="ranked-reviewer-details">
+                <summary>Show all reviewer runs ({reviewerRuns.length})</summary>
+                <div className="runs-grid ranked-reviewer-grid">
+                  {reviewerRuns.map((run) => (
+                    <RunCard key={run.id} run={run} />
+                  ))}
+                </div>
+              </details>
+            )}
+          </>
         ) : (
           <div className="runs-grid">
             {batch.runs.map((run) => (
