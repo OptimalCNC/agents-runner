@@ -24,6 +24,7 @@ import type {
   BatchStatus,
   BatchStore,
   BranchRemovalResult,
+  CodexTurnConfig,
   GenerationTask,
   ProjectContext,
   Run,
@@ -70,6 +71,15 @@ function truncateText(value: unknown, limit: number = MAX_TEXT_LENGTH): string {
   }
 
   return `${text.slice(0, limit)}\n\n...truncated...`;
+}
+
+function escapeXml(value: unknown): string {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
 function compactJson(value: unknown): unknown {
@@ -201,7 +211,53 @@ function buildRunTurn(prompt: string, runIndex: number, turnIndex: number): RunT
     finalResponse: "",
     error: null,
     usage: null,
+    codexConfig: null,
     items: [],
+  };
+}
+
+interface BuildCodexTurnConfigOptions {
+  launchMode: "start" | "resume";
+  developerPrompt?: string | null;
+  clientConfig?: Record<string, unknown>;
+  sessionConfig: {
+    model?: string | null;
+    sandboxMode: string;
+    approvalPolicy: string;
+    workingDirectory: string;
+    networkAccessEnabled: boolean;
+    webSearchEnabled: boolean;
+    webSearchMode: string;
+    modelReasoningEffort?: string | null;
+  };
+  resumeThreadId?: string | null;
+}
+
+export function buildCodexTurnConfig(options: BuildCodexTurnConfigOptions): CodexTurnConfig {
+  const clientConfig = compactJson(options.clientConfig || {}) as Record<string, unknown>;
+  const developerPrompt = String(
+    options.developerPrompt
+      ?? clientConfig.developer_instructions
+      ?? "",
+  ).trim();
+
+  return {
+    launchMode: options.launchMode,
+    developerPrompt: developerPrompt || null,
+    clientConfig,
+    sessionConfig: {
+      model: options.sessionConfig.model?.trim() || null,
+      sandboxMode: options.sessionConfig.sandboxMode,
+      approvalPolicy: options.sessionConfig.approvalPolicy,
+      workingDirectory: options.sessionConfig.workingDirectory,
+      networkAccessEnabled: options.sessionConfig.networkAccessEnabled,
+      webSearchEnabled: options.sessionConfig.webSearchEnabled,
+      webSearchMode: options.sessionConfig.webSearchMode,
+      modelReasoningEffort: options.sessionConfig.modelReasoningEffort?.trim() || null,
+    },
+    resumeThreadId: options.launchMode === "resume"
+      ? String(options.resumeThreadId ?? "").trim() || null
+      : null,
   };
 }
 
@@ -538,15 +594,44 @@ function buildCandidateDeveloperInstructions(branchName: string): string {
   ].join("\n");
 }
 
-function buildReviewPrompt(batch: Batch, candidateRun: Run): string {
+function buildReviewRunTitle(candidateRun: Run, reviewIndex: number): string {
+  return `Review ${reviewIndex + 1} for ${candidateRun.title}`;
+}
+
+function buildReviewTasks(batch: Batch, candidateRun: Run): Array<GenerationTask & { reviewedRunId: string }> {
+  return Array.from({ length: batch.config.reviewCount }, (_, reviewIndex) => ({
+    title: buildReviewRunTitle(candidateRun, reviewIndex),
+    prompt: buildReviewPrompt(batch, candidateRun),
+    reviewedRunId: candidateRun.id,
+  }));
+}
+
+export function buildReviewPrompt(batch: Batch, candidateRun: Run): string {
   const candidateBranch = getRunCreatedBranchName(candidateRun) || "(branch unavailable)";
   const baseBranch = candidateRun.baseRef || batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "(base unavailable)";
+  const originalTask = batch.config.prompt.trim() || "(task unavailable)";
 
   return [
     batch.config.reviewPrompt.trim(),
     "",
-    `Candidate branch: ${candidateBranch}`,
-    `Base branch: ${baseBranch}`,
+    "---",
+    "",
+    "You can find the work in the repository:",
+    "",
+    "```xml",
+    "<review_info>",
+    `<task_branch>${escapeXml(candidateBranch)}</task_branch>`,
+    `<base_branch>${escapeXml(baseBranch)}</base_branch>`,
+    `<candidate_run_id>${escapeXml(candidateRun.id)}</candidate_run_id>`,
+    "</review_info>",
+    "```",
+    "",
+    "Review the task branch against the base branch in the current repository before you score it.",
+    "",
+    "The task is to:",
+    "````markdown",
+    originalTask,
+    "````",
   ].join("\n");
 }
 
@@ -623,31 +708,103 @@ function applyCandidateScores(store: BatchStore, batchId: string, reviewRuns: Ru
     scoreMap.get(reviewedRunId)!.push(score);
   }
 
-  store.updateBatch(batchId, (batch) => {
-    for (const run of batch.runs) {
-      if (run.kind === "reviewer") {
-        run.score = reviewerScoreMap.get(run.id) ?? null;
-      }
-    }
+  const batch = store.getBatch(batchId);
+  if (!batch || batch.mode !== "ranked") {
+    return;
+  }
 
-    const candidateRuns = batch.runs.filter((run) => run.kind !== "reviewer");
+  const candidateRuns = batch.runs.filter((run) => run.kind !== "reviewer");
+  const candidateScoreMap = new Map<string, number | null>();
+  const candidateRankMap = new Map<string, number | null>();
 
-    for (const run of candidateRuns) {
-      const values = scoreMap.get(run.id) || [];
-      run.score = values.length > 0
+  for (const run of candidateRuns) {
+    const values = scoreMap.get(run.id) || [];
+    candidateScoreMap.set(
+      run.id,
+      values.length > 0
         ? Number((values.reduce((acc, value) => acc + value, 0) / values.length).toFixed(2))
-        : null;
-      run.rank = null;
+        : null,
+    );
+    candidateRankMap.set(run.id, null);
+  }
+
+  const rankedRuns = candidateRuns
+    .filter((run) => candidateScoreMap.get(run.id) !== null)
+    .sort((left, right) => Number(candidateScoreMap.get(right.id) ?? -1) - Number(candidateScoreMap.get(left.id) ?? -1));
+
+  for (const [index, run] of rankedRuns.entries()) {
+    candidateRankMap.set(run.id, index + 1);
+  }
+
+  for (const run of batch.runs) {
+    if (run.kind === "reviewer") {
+      const nextScore = reviewerScoreMap.get(run.id) ?? null;
+      if ((run.score ?? null) === nextScore && (run.rank ?? null) === null) {
+        continue;
+      }
+
+      store.updateRun(batchId, run.id, (mutableRun) => {
+        mutableRun.score = nextScore;
+        mutableRun.rank = null;
+      });
+      continue;
     }
 
-    const rankedRuns = candidateRuns
-      .filter((run) => run.score !== null)
-      .sort((left, right) => Number(right.score) - Number(left.score));
-
-    for (const [index, run] of rankedRuns.entries()) {
-      run.rank = index + 1;
+    const nextScore = candidateScoreMap.get(run.id) ?? null;
+    const nextRank = candidateRankMap.get(run.id) ?? null;
+    if ((run.score ?? null) === nextScore && (run.rank ?? null) === nextRank) {
+      continue;
     }
+
+    store.updateRun(batchId, run.id, (mutableRun) => {
+      mutableRun.score = nextScore;
+      mutableRun.rank = nextRank;
+    });
+  }
+}
+
+function listReviewerRunsForCandidate(batch: Batch, candidateRunId: string): Run[] {
+  return batch.runs
+    .filter((run) => run.kind === "reviewer" && run.reviewedRunId === candidateRunId)
+    .sort((left, right) => left.index - right.index);
+}
+
+function finalizeQueuedRun(
+  store: BatchStore,
+  batchId: string,
+  runId: string,
+  status: "failed" | "cancelled",
+  message: string,
+): void {
+  store.updateRun(batchId, runId, (run) => {
+    const turn = run.turns.at(0);
+    if (!turn || turn.status !== "queued") {
+      return;
+    }
+
+    turn.status = status;
+    turn.completedAt = nowIso();
+    turn.error = message;
+    run.completedAt = nowIso();
+    run.error = message;
+    appendLog(run, status === "cancelled" ? "warning" : "error", message);
+    syncRunDerivedState(run);
   });
+}
+
+function cancelQueuedRuns(store: BatchStore, batchId: string, message: string): void {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return;
+  }
+
+  for (const run of batch.runs) {
+    if (run.status !== "queued") {
+      continue;
+    }
+
+    finalizeQueuedRun(store, batchId, run.id, "cancelled", message);
+  }
 }
 
 function buildTaskSchema(count: number): Record<string, unknown> {
@@ -788,6 +945,84 @@ function deriveBatchStatus(batch: Batch): BatchStatus {
   }
 
   return "queued";
+}
+
+function getRunTerminalTimestamp(run: Run): string {
+  const latestTurn = getLatestRunTurn(run);
+  return latestTurn?.completedAt
+    || run.completedAt
+    || run.logs.at(-1)?.at
+    || latestTurn?.startedAt
+    || run.startedAt
+    || nowIso();
+}
+
+function hasRunCompletionEvidence(run: Run): boolean {
+  const latestTurn = getLatestRunTurn(run);
+  if (latestTurn?.error) {
+    return false;
+  }
+
+  if (extractReviewerScoreFromMcp(run) !== null) {
+    return true;
+  }
+
+  if (latestTurn?.finalResponse || run.finalResponse) {
+    return true;
+  }
+
+  return run.logs.some((entry) =>
+    entry.message.startsWith("Turn completed.")
+      || entry.message === "Run completed."
+      || entry.message === "Follow-up turn completed.",
+  );
+}
+
+function reconcileSettledBatchRuns(store: BatchStore, batchId: string): void {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return;
+  }
+
+  const pendingRunIds = batch.runs
+    .filter((run) => isRunPendingStatus(run.status))
+    .map((run) => run.id);
+
+  if (pendingRunIds.length === 0) {
+    return;
+  }
+
+  for (const runId of pendingRunIds) {
+    store.updateRun(batchId, runId, (run) => {
+      const latestTurn = getLatestRunTurn(run);
+      if (!latestTurn) {
+        return;
+      }
+
+      if (!isRunPendingStatus(latestTurn.status)) {
+        syncRunDerivedState(run);
+        return;
+      }
+
+      latestTurn.completedAt ||= getRunTerminalTimestamp(run);
+
+      if (batch.cancelRequested) {
+        latestTurn.status = "cancelled";
+        latestTurn.error ||= "Batch cancelled.";
+      } else if (hasRunCompletionEvidence(run)) {
+        latestTurn.status = "completed";
+      } else {
+        latestTurn.status = "failed";
+        latestTurn.error ||= "Run ended without reaching a terminal state.";
+      }
+
+      syncRunDerivedState(run);
+    });
+  }
+
+  if (batch.mode === "ranked") {
+    recomputeRankedScores(store, batchId);
+  }
 }
 
 async function generateTasks(store: BatchStore, batchId: string, projectContext: ProjectContext): Promise<GenerationTask[]> {
@@ -1166,11 +1401,10 @@ async function executeRun(
 
     const developerInstructions = options.developerInstructions
       || (createdBranchName ? buildCandidateDeveloperInstructions(createdBranchName) : "");
-    const codexConfig = developerInstructions
+    const clientConfig = developerInstructions
       ? { developer_instructions: developerInstructions }
       : {};
-    const codex = getCodexClient(codexConfig);
-    const thread = codex.startThread({
+    const sessionConfig = {
       model: batch.config.model || undefined,
       sandboxMode: options.sandboxModeOverride || batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
       approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
@@ -1179,7 +1413,25 @@ async function executeRun(
       webSearchEnabled: batch.config.webSearchMode !== "disabled",
       webSearchMode: batch.config.webSearchMode as "disabled" | "live",
       modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
+    };
+    const turnCodexConfig = buildCodexTurnConfig({
+      launchMode: "start",
+      developerPrompt: developerInstructions,
+      clientConfig,
+      sessionConfig,
     });
+
+    store.updateRun(batchId, runId, (run) => {
+      const turn = getRunTurn(run, initialTurnId);
+      if (!turn) {
+        return;
+      }
+
+      turn.codexConfig = turnCodexConfig;
+    });
+
+    const codex = getCodexClient(clientConfig);
+    const thread = codex.startThread(sessionConfig);
 
     const runPrompt = options.promptOverride || runSnapshot.prompt;
     const { events } = await thread.runStreamed(runPrompt, {
@@ -1230,6 +1482,60 @@ async function executeRun(
   }
 }
 
+async function executeReviewerRun(
+  store: BatchStore,
+  batchId: string,
+  runId: string,
+  projectContext: ProjectContext,
+): Promise<void> {
+  const batch = store.getMutableBatch(batchId);
+  if (!batch || batch.cancelRequested) {
+    finalizeQueuedRun(store, batchId, runId, "cancelled", "Batch cancelled before review start.");
+    return;
+  }
+
+  const reviewRun = batch.runs.find((entry) => entry.id === runId);
+  if (!reviewRun || reviewRun.kind !== "reviewer" || reviewRun.status !== "queued") {
+    return;
+  }
+
+  const reviewedRun = batch.runs.find((entry) => entry.id === reviewRun.reviewedRunId);
+  if (!reviewedRun) {
+    finalizeQueuedRun(store, batchId, runId, "failed", "Reviewed run is unavailable.");
+    return;
+  }
+
+  const reviewedWorkingDirectory = reviewedRun.workingDirectory || reviewedRun.worktreePath || null;
+  const prompt = buildReviewPrompt(batch, reviewedRun);
+
+  store.updateRun(batchId, runId, (run) => {
+    run.prompt = prompt;
+    const turn = run.turns[0];
+    if (turn && turn.status === "queued") {
+      turn.prompt = prompt;
+    }
+  });
+
+  if (!reviewedWorkingDirectory) {
+    finalizeQueuedRun(store, batchId, runId, "failed", "Reviewed run workspace is unavailable.");
+    return;
+  }
+
+  await executeRun(store, batchId, runId, projectContext, {
+    sandboxModeOverride: "read-only",
+    workingDirectoryOverride: reviewedWorkingDirectory,
+    promptOverride: prompt,
+    developerInstructions: buildReviewerDeveloperInstructions(String(reviewRun.reviewedRunId ?? "")),
+  });
+}
+
+function getRankedExecutionConcurrency(batch: Batch): number {
+  return Math.max(
+    1,
+    Math.min(batch.config.concurrency, batch.config.runCount * Math.max(1, batch.config.reviewCount)),
+  );
+}
+
 async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
   let index = 0;
   const activeWorkers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
@@ -1246,6 +1552,114 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
   });
 
   await Promise.all(activeWorkers);
+}
+
+interface RankedScheduledTask {
+  kind: "candidate" | "reviewer";
+  runId: string;
+}
+
+async function executeRankedBatch(
+  store: BatchStore,
+  batchId: string,
+  projectContext: ProjectContext,
+  candidateRuns: Run[],
+): Promise<void> {
+  const rankedBatch = store.getBatch(batchId)!;
+  const reviewTaskEntries = candidateRuns.flatMap((candidateRun) => buildReviewTasks(rankedBatch, candidateRun));
+
+  for (const [index, task] of reviewTaskEntries.entries()) {
+    const run = buildRunRecord(task, candidateRuns.length + index, "reviewer", task.reviewedRunId);
+    store.appendRun(batchId, run);
+  }
+
+  const readyQueue: RankedScheduledTask[] = candidateRuns.map((run) => ({
+    kind: "candidate",
+    runId: run.id,
+  }));
+  const enqueuedReviewerRunIds = new Set<string>();
+  const activeTasks = new Set<Promise<void>>();
+  const concurrency = getRankedExecutionConcurrency(store.getBatch(batchId)!);
+
+  function enqueueReviewerRuns(candidateRunId: string): void {
+    const currentBatch = store.getBatch(batchId);
+    if (!currentBatch || currentBatch.mode !== "ranked" || currentBatch.cancelRequested) {
+      return;
+    }
+
+    const nextReviewerTasks: RankedScheduledTask[] = [];
+    for (const reviewerRun of listReviewerRunsForCandidate(currentBatch, candidateRunId)) {
+      if (reviewerRun.status !== "queued" || enqueuedReviewerRunIds.has(reviewerRun.id)) {
+        continue;
+      }
+
+      nextReviewerTasks.push({
+        kind: "reviewer",
+        runId: reviewerRun.id,
+      });
+      enqueuedReviewerRunIds.add(reviewerRun.id);
+    }
+
+    if (nextReviewerTasks.length > 0) {
+      readyQueue.unshift(...nextReviewerTasks);
+    }
+  }
+
+  function launchTask(task: RankedScheduledTask): void {
+    const promise = (async () => {
+      if (task.kind === "candidate") {
+        const mutableBatch = store.getMutableBatch(batchId);
+        if (!mutableBatch || mutableBatch.cancelRequested) {
+          finalizeQueuedRun(store, batchId, task.runId, "cancelled", "Batch cancelled before start.");
+          return;
+        }
+
+        await executeRun(store, batchId, task.runId, projectContext, {
+          autoCreateBranch: true,
+        });
+        enqueueReviewerRuns(task.runId);
+        return;
+      }
+
+      await executeReviewerRun(store, batchId, task.runId, projectContext);
+    })().finally(() => {
+      activeTasks.delete(promise);
+    });
+
+    activeTasks.add(promise);
+  }
+
+  while (readyQueue.length > 0 || activeTasks.size > 0) {
+    const mutableBatch = store.getMutableBatch(batchId);
+    if (mutableBatch?.cancelRequested && readyQueue.length > 0) {
+      while (readyQueue.length > 0) {
+        const task = readyQueue.shift()!;
+        finalizeQueuedRun(
+          store,
+          batchId,
+          task.runId,
+          "cancelled",
+          task.kind === "reviewer" ? "Batch cancelled before review start." : "Batch cancelled before start.",
+        );
+      }
+    }
+
+    while (readyQueue.length > 0 && activeTasks.size < concurrency && !store.getMutableBatch(batchId)?.cancelRequested) {
+      launchTask(readyQueue.shift()!);
+    }
+
+    if (activeTasks.size === 0) {
+      break;
+    }
+
+    await Promise.race(activeTasks);
+  }
+
+  if (store.getMutableBatch(batchId)?.cancelRequested) {
+    cancelQueuedRuns(store, batchId, "Batch cancelled before start.");
+  }
+
+  recomputeRankedScores(store, batchId);
 }
 
 export async function executeBatch(store: BatchStore, batchId: string): Promise<void> {
@@ -1282,43 +1696,10 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
 
     const latestBatch = store.getBatch(batchId)!;
     const candidateRuns = latestBatch.runs.filter((run) => run.kind !== "reviewer");
-    await runWithConcurrency(candidateRuns, latestBatch.config.concurrency, async (run) => {
-      const mutableBatch = store.getMutableBatch(batchId);
-      if (!mutableBatch || mutableBatch.cancelRequested) {
-        store.updateRun(batchId, run.id, (mutableRun) => {
-          mutableRun.status = "cancelled";
-          mutableRun.completedAt = nowIso();
-          mutableRun.error = "Batch cancelled before start.";
-          appendLog(mutableRun, "warning", mutableRun.error!);
-        });
-        return;
-      }
-
-      await executeRun(store, batchId, run.id, projectContext, {
-        autoCreateBranch: mutableBatch.mode === "ranked",
-      });
-    });
-
-    const afterCandidates = store.getBatch(batchId)!;
-    if (afterCandidates.mode === "ranked" && !afterCandidates.cancelRequested) {
-      const freshCandidates = afterCandidates.runs.filter((run) => run.kind !== "reviewer");
-      const reviewTaskEntries = freshCandidates.flatMap((candidateRun) =>
-        Array.from({ length: afterCandidates.config.reviewCount }, (_, reviewIndex) => ({
-          title: `Review ${candidateRun.id} #${reviewIndex + 1}`,
-          prompt: buildReviewPrompt(afterCandidates, candidateRun),
-          reviewedRunId: candidateRun.id,
-        })),
-      );
-
-      for (const [index, task] of reviewTaskEntries.entries()) {
-        const run = buildRunRecord(task, freshCandidates.length + index, "reviewer", task.reviewedRunId);
-        store.appendRun(batchId, run);
-      }
-
-      const withReviewRuns = store.getBatch(batchId)!;
-      const reviewRuns = withReviewRuns.runs.filter((run) => run.kind === "reviewer");
-
-      await runWithConcurrency(reviewRuns, withReviewRuns.config.concurrency, async (run) => {
+    if (latestBatch.mode === "ranked") {
+      await executeRankedBatch(store, batchId, projectContext, candidateRuns);
+    } else {
+      await runWithConcurrency(candidateRuns, latestBatch.config.concurrency, async (run) => {
         const mutableBatch = store.getMutableBatch(batchId);
         if (!mutableBatch || mutableBatch.cancelRequested) {
           store.updateRun(batchId, run.id, (mutableRun) => {
@@ -1330,37 +1711,13 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
           return;
         }
 
-        const reviewedRun = mutableBatch.runs.find((entry) => entry.id === run.reviewedRunId);
-        const reviewedWorkingDirectory = reviewedRun?.workingDirectory || reviewedRun?.worktreePath || null;
-        if (!reviewedWorkingDirectory) {
-          store.updateRun(batchId, run.id, (mutableRun) => {
-            const turn = mutableRun.turns.at(0);
-            if (turn) {
-              turn.status = "failed";
-              turn.completedAt = nowIso();
-              turn.error = "Reviewed run workspace is unavailable.";
-            }
-            mutableRun.status = "failed";
-            mutableRun.completedAt = nowIso();
-            mutableRun.error = "Reviewed run workspace is unavailable.";
-            appendLog(mutableRun, "error", mutableRun.error);
-          });
-          return;
-        }
-
         await executeRun(store, batchId, run.id, projectContext, {
-          sandboxModeOverride: "read-only",
-          workingDirectoryOverride: reviewedWorkingDirectory,
-          promptOverride: run.prompt,
-          developerInstructions: buildReviewerDeveloperInstructions(String(run.reviewedRunId ?? "")),
+          autoCreateBranch: false,
         });
       });
-
-      const completedBatch = store.getBatch(batchId)!;
-      const completedReviewRuns = completedBatch.runs.filter((run) => run.kind === "reviewer" && run.status === "completed");
-      applyCandidateScores(store, batchId, completedReviewRuns);
     }
 
+    reconcileSettledBatchRuns(store, batchId);
     store.updateBatch(batchId, (mutableBatch) => {
       mutableBatch.status = deriveBatchStatus(mutableBatch);
       mutableBatch.completedAt = nowIso();
@@ -1428,8 +1785,24 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
     throw new Error("This run is already active.");
   }
 
+  const sessionConfig = {
+    model: batch.config.model || undefined,
+    sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
+    approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
+    workingDirectory,
+    networkAccessEnabled: batch.config.networkAccessEnabled,
+    webSearchEnabled: batch.config.webSearchMode !== "disabled",
+    webSearchMode: batch.config.webSearchMode as "disabled" | "live",
+    modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
+  };
   const nextTurn = buildRunTurn(prompt, runSnapshot.index, runSnapshot.turns.length);
   nextTurn.status = "waiting_for_codex";
+  nextTurn.codexConfig = buildCodexTurnConfig({
+    launchMode: "resume",
+    clientConfig: {},
+    sessionConfig,
+    resumeThreadId: threadId,
+  });
   const controller = new AbortController();
   execution.runControllers.set(runId, controller);
 
@@ -1452,16 +1825,7 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
   void (async () => {
     try {
       const codex = getCodexClient();
-      const thread = codex.resumeThread(threadId, {
-        model: batch.config.model || undefined,
-        sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
-        approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
-        workingDirectory,
-        networkAccessEnabled: batch.config.networkAccessEnabled,
-        webSearchEnabled: batch.config.webSearchMode !== "disabled",
-        webSearchMode: batch.config.webSearchMode as "disabled" | "live",
-        modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
-      });
+      const thread = codex.resumeThread(threadId, sessionConfig);
 
       const { events } = await thread.runStreamed(prompt, {
         signal: controller.signal,

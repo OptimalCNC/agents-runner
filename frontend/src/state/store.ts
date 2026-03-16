@@ -248,7 +248,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   mergeBatchMeta: (batchId, batchMeta) => {
-    const { batchDetails, upsertBatchSummary } = get();
+    const { batchDetails } = get();
     const existing = batchDetails.get(batchId);
     if (!existing) {
       return;
@@ -263,7 +263,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const nextBatchDetails = new Map(batchDetails);
     nextBatchDetails.set(batchId, merged);
     set({ batchDetails: nextBatchDetails });
-    upsertBatchSummary(buildBatchSummary(merged));
   },
 
   upsertRunInBatch: (batchId, run, summary) => {

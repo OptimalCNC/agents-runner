@@ -30,6 +30,18 @@ function closeDrawer() {
   document.body.style.overflow = "";
 }
 
+const DEFAULT_REVIEW_PROMPT = "Review the implementation on the task branch against the base branch. Score it from 0 to 100, prioritizing correctness, task completion, code quality, and regression risk. Penalize incomplete work, broken behavior, and unnecessary changes.";
+
+function getMaxConcurrency(
+  mode: "repeated" | "generated" | "ranked",
+  runCountValue: string,
+  reviewCountValue: string,
+): number {
+  const normalizedRunCount = Math.max(1, Number.parseInt(runCountValue || "1", 10) || 1);
+  const normalizedReviewCount = Math.max(1, Number.parseInt(reviewCountValue || "1", 10) || 1);
+  return mode === "ranked" ? normalizedRunCount * normalizedReviewCount : normalizedRunCount;
+}
+
 export function NewBatchDrawer() {
   const isOpen = useAppStore((s) => s.drawerOpen);
   const batches = useAppStore((s) => s.batches);
@@ -44,7 +56,7 @@ export function NewBatchDrawer() {
   const [concurrency, setConcurrency] = useState("10");
   const [prompt, setPrompt] = useState("");
   const [taskPrompt, setTaskPrompt] = useState("");
-  const [reviewPrompt, setReviewPrompt] = useState("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
+  const [reviewPrompt, setReviewPrompt] = useState(DEFAULT_REVIEW_PROMPT);
   const [reviewCount, setReviewCount] = useState("3");
   const [baseRef, setBaseRef] = useState("");
   const [model, setModel] = useState("");
@@ -71,7 +83,7 @@ export function NewBatchDrawer() {
     setConcurrency(String(c?.defaults?.runCount ?? 10));
     setPrompt("");
     setTaskPrompt("");
-    setReviewPrompt("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
+    setReviewPrompt(DEFAULT_REVIEW_PROMPT);
     setReviewCount("3");
     setBaseRef("");
     setModel("");
@@ -106,9 +118,29 @@ export function NewBatchDrawer() {
     setRecentProjectPaths(rememberRecentProjectPath(path));
   }
 
-  function syncMaxConcurrency(count: string) {
-    const n = Number(count || "1");
-    if (Number(concurrency) > n) setConcurrency(String(n));
+  function syncMaxConcurrency(
+    nextRunCount: string,
+    nextMode: "repeated" | "generated" | "ranked" = mode,
+    nextReviewCount: string = reviewCount,
+  ) {
+    const max = getMaxConcurrency(nextMode, nextRunCount, nextReviewCount);
+    if (Number(concurrency) > max) setConcurrency(String(max));
+  }
+
+  function clampConcurrencyInput(value: string) {
+    const max = getMaxConcurrency(mode, runCount, reviewCount);
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isNaN(parsed)) {
+      setConcurrency(String(max));
+      return;
+    }
+
+    setConcurrency(String(Math.max(1, Math.min(parsed, max))));
+  }
+
+  function handleModeChange(nextMode: "repeated" | "generated" | "ranked") {
+    setMode(nextMode);
+    syncMaxConcurrency(runCount, nextMode);
   }
 
   async function doInspect(path: string) {
@@ -186,6 +218,10 @@ export function NewBatchDrawer() {
     projectPath.trim().length > 0 &&
     Boolean(inspect) &&
     ((mode === "repeated" || mode === "ranked") ? prompt.trim().length > 0 : taskPrompt.trim().length > 0) && (mode !== "ranked" || reviewPrompt.trim().length > 0);
+  const concurrencyLimit = getMaxConcurrency(mode, runCount, reviewCount);
+  const concurrencyHint = mode === "ranked"
+    ? `Max ${concurrencyLimit} shared across candidate and reviewer runs.`
+    : `Max ${concurrencyLimit} parallel runs.`;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -193,16 +229,26 @@ export function NewBatchDrawer() {
     setSubmitting(true);
 
     try {
+      const normalizedRunCount = Math.max(1, Number.parseInt(runCount || "1", 10) || 1);
+      const normalizedReviewCount = Math.max(1, Number.parseInt(reviewCount || "1", 10) || 1);
+      const maxConcurrency = mode === "ranked"
+        ? normalizedRunCount * normalizedReviewCount
+        : normalizedRunCount;
+      const normalizedConcurrency = Math.max(
+        1,
+        Math.min(Number.parseInt(concurrency || String(normalizedRunCount), 10) || normalizedRunCount, maxConcurrency),
+      );
+
       const payload = {
         mode,
         projectPath: projectPath.trim(),
         worktreeRoot: worktreeRoot.trim(),
-        runCount: Number(runCount),
-        concurrency: Number(concurrency),
+        runCount: normalizedRunCount,
+        concurrency: normalizedConcurrency,
         prompt: prompt.trim(),
         taskPrompt: taskPrompt.trim(),
         reviewPrompt: reviewPrompt.trim(),
-        reviewCount: Number(reviewCount),
+        reviewCount: normalizedReviewCount,
         baseRef: baseRef.trim(),
         model: model.trim(),
         reasoningEffort,
@@ -274,7 +320,7 @@ export function NewBatchDrawer() {
                 className={`seg-btn${mode === "repeated" ? " is-active" : ""}`}
                 data-mode="repeated"
                 type="button"
-                onClick={() => setMode("repeated")}
+                onClick={() => handleModeChange("repeated")}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="17 1 21 5 17 9" />
@@ -288,7 +334,7 @@ export function NewBatchDrawer() {
                 className={`seg-btn${mode === "generated" ? " is-active" : ""}`}
                 data-mode="generated"
                 type="button"
-                onClick={() => setMode("generated")}
+                onClick={() => handleModeChange("generated")}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -299,7 +345,7 @@ export function NewBatchDrawer() {
                 className={`seg-btn${mode === "ranked" ? " is-active" : ""}`}
                 data-mode="ranked"
                 type="button"
-                onClick={() => setMode("ranked")}
+                onClick={() => handleModeChange("ranked")}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
@@ -426,7 +472,7 @@ export function NewBatchDrawer() {
             <div className="form-section">
               <label className="form-label form-label-with-hint" htmlFor="concurrency">
                 Concurrency
-                <span className="hint-icon" data-tooltip="Max runs executing in parallel. Cannot exceed run count." aria-label="Concurrency help">
+                <span className="hint-icon" data-tooltip="Max runs executing in parallel. In Ranked mode this is one shared pool for candidate and reviewer runs." aria-label="Concurrency help">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10" />
                     <path d="M12 16v-4M12 8h.01" />
@@ -437,12 +483,14 @@ export function NewBatchDrawer() {
                 id="concurrency"
                 name="concurrency"
                 min="1"
-                max={runCount}
                 type="number"
                 value={concurrency}
                 required
+                aria-describedby="concurrencyHint"
                 onChange={(e) => setConcurrency(e.target.value)}
+                onBlur={(e) => clampConcurrencyInput(e.target.value)}
               />
+              <span className="form-hint" id="concurrencyHint">{concurrencyHint}</span>
             </div>
           </div>
 
@@ -495,7 +543,11 @@ export function NewBatchDrawer() {
                     type="number"
                     value={reviewCount}
                     required
-                    onChange={(e) => setReviewCount(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setReviewCount(value);
+                      syncMaxConcurrency(runCount, mode, value);
+                    }}
                   />
                 </div>
               </div>
@@ -509,6 +561,7 @@ export function NewBatchDrawer() {
                   placeholder="Tell reviewer agents how to score candidate runs."
                   onChange={(e) => setReviewPrompt(e.target.value)}
                 />
+                <span className="form-hint">XML branch metadata is added automatically.</span>
               </div>
             </>
           )}
@@ -606,10 +659,8 @@ export function NewBatchDrawer() {
                 setConcurrency(String(c?.defaults?.runCount ?? 10));
                 setPrompt("");
                 setTaskPrompt("");
-                setReviewPrompt("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
+                setReviewPrompt(DEFAULT_REVIEW_PROMPT);
                 setReviewCount("3");
-    setReviewPrompt("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
-    setReviewCount("3");
                 setBaseRef("");
                 setModel("");
                 setReasoningEffort("");

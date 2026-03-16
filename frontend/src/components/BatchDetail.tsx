@@ -53,6 +53,61 @@ function parseReviewerGlance(run: Run): ReviewerGlance {
   return { run, score: fallbackScore, reason: run.finalResponse.trim() };
 }
 
+function formatRunStatusLabel(status: Run["status"]): string {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "preparing":
+      return "Preparing";
+    case "waiting_for_codex":
+      return "Waiting";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return status;
+  }
+}
+
+function buildReviewerGlanceMeta(entry: ReviewerGlance): string {
+  const statusLabel = formatRunStatusLabel(entry.run.status);
+  return entry.score === null ? statusLabel : `${statusLabel} · Score ${entry.score}`;
+}
+
+function buildReviewerGlanceReason(entry: ReviewerGlance): string {
+  if (entry.reason) {
+    return entry.reason;
+  }
+
+  if (entry.run.error) {
+    return entry.run.error;
+  }
+
+  switch (entry.run.status) {
+    case "queued":
+      return "Starts after the candidate run is ready.";
+    case "preparing":
+      return "Preparing the reviewer workspace.";
+    case "waiting_for_codex":
+      return "Waiting for Codex to start.";
+    case "running":
+      return "Reviewer is still evaluating this run.";
+    case "completed":
+      return "Open the reviewer run for details.";
+    case "failed":
+      return "Reviewer run failed before submitting a score.";
+    case "cancelled":
+      return "Reviewer run was cancelled.";
+    default:
+      return "Open the reviewer run for details.";
+  }
+}
+
 function buildRunsSummaryLabel(batch: { mode: string; runs: Run[]; config: { runCount: number } }): string {
   if (batch.mode !== "ranked") {
     return `${batch.runs.length} / ${batch.config.runCount}`;
@@ -115,9 +170,8 @@ export function BatchDetail() {
       return Number(right.score ?? -1) - Number(left.score ?? -1);
     });
 
-  const reviewerRuns = batch.runs.filter((run) => run.kind === "reviewer");
   const reviewerByCandidate = new Map<string, ReviewerGlance[]>();
-  for (const reviewRun of reviewerRuns) {
+  for (const reviewRun of batch.runs.filter((run) => run.kind === "reviewer")) {
     const targetRunId = String(reviewRun.reviewedRunId ?? "").trim();
     if (!targetRunId) {
       continue;
@@ -254,8 +308,9 @@ export function BatchDetail() {
             <div className="ranked-candidate-grid">
               {candidateRuns.map((candidateRun) => {
                 const glanceEntries = (reviewerByCandidate.get(candidateRun.id) || [])
-                  .sort((left, right) => Number(right.score ?? -1) - Number(left.score ?? -1));
-                const previewEntries = glanceEntries.slice(0, 2);
+                  .sort((left, right) => left.run.index - right.run.index);
+                const scoredCount = glanceEntries.filter((entry) => entry.score !== null).length;
+                const expectedReviewCount = Math.max(batch.config.reviewCount, glanceEntries.length);
 
                 return (
                   <div key={candidateRun.id} className="ranked-candidate-item">
@@ -263,24 +318,25 @@ export function BatchDetail() {
                     <div className="ranked-review-glance">
                       <div className="ranked-review-glance-header">
                         <span className="ranked-review-glance-title">Reviewer glance</span>
-                        <span className="ranked-review-glance-count">{glanceEntries.length} reviews</span>
+                        <span className="ranked-review-glance-count">{scoredCount}/{expectedReviewCount} scored</span>
                       </div>
-                      {previewEntries.length === 0 ? (
-                        <div className="ranked-review-empty">No reviewer summary yet.</div>
+                      {glanceEntries.length === 0 ? (
+                        <div className="ranked-review-empty">Reviewer runs will appear once the candidate run is ready.</div>
                       ) : (
                         <div className="ranked-review-glance-list">
-                          {previewEntries.map((entry) => (
+                          {glanceEntries.map((entry, index) => (
                             <button
                               key={entry.run.id}
-                              className="ranked-review-glance-item"
+                              className={`ranked-review-glance-item${selectedRunId === entry.run.id ? " is-selected" : ""}`}
                               type="button"
                               onClick={() => useAppStore.getState().selectRun(entry.run.id)}
                             >
-                              <span className="ranked-review-glance-item-score">
-                                {entry.score === null ? "No score" : `Score ${entry.score}`}
+                              <span className="ranked-review-glance-item-top">
+                                <span className="ranked-review-glance-item-label">Review {index + 1}</span>
+                                <span className="ranked-review-glance-item-meta">{buildReviewerGlanceMeta(entry)}</span>
                               </span>
                               <span className="ranked-review-glance-item-reason">
-                                {entry.reason || "Open reviewer run for details."}
+                                {buildReviewerGlanceReason(entry)}
                               </span>
                             </button>
                           ))}
@@ -292,16 +348,6 @@ export function BatchDetail() {
               })}
             </div>
 
-            {reviewerRuns.length > 0 && (
-              <details className="ranked-reviewer-details">
-                <summary>Show all reviewer runs ({reviewerRuns.length})</summary>
-                <div className="runs-grid ranked-reviewer-grid">
-                  {reviewerRuns.map((run) => (
-                    <RunCard key={run.id} run={run} />
-                  ))}
-                </div>
-              </details>
-            )}
           </>
         ) : (
           <div className="runs-grid">

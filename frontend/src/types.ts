@@ -77,6 +77,25 @@ export interface RunUsage {
   [key: string]: unknown;
 }
 
+export interface CodexSessionConfig {
+  model: string | null;
+  sandboxMode: string;
+  approvalPolicy: string;
+  workingDirectory: string;
+  networkAccessEnabled: boolean;
+  webSearchEnabled: boolean;
+  webSearchMode: string;
+  modelReasoningEffort: string | null;
+}
+
+export interface CodexTurnConfig {
+  launchMode: "start" | "resume";
+  developerPrompt: string | null;
+  clientConfig: Record<string, unknown>;
+  sessionConfig: CodexSessionConfig;
+  resumeThreadId: string | null;
+}
+
 export interface RunTurn {
   id: string;
   index: number;
@@ -88,6 +107,7 @@ export interface RunTurn {
   finalResponse: string;
   error: string | null;
   usage: RunUsage | null;
+  codexConfig?: CodexTurnConfig | null;
   items: StreamItem[];
 }
 

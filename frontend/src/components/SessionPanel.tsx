@@ -63,6 +63,14 @@ function buildOptimisticTurn(run: Run, prompt: string): RunTurn {
   };
 }
 
+function formatCodexTurnConfig(turn: RunTurn): string {
+  if (!turn.codexConfig) {
+    return "";
+  }
+
+  return JSON.stringify(turn.codexConfig, null, 2);
+}
+
 function getTurnPlaceholder(status: RunTurn["status"], isSubmitting: boolean): string {
   if (isSubmitting) {
     return "Sending follow-up to Codex...";
@@ -248,6 +256,31 @@ export function SessionPanel({ batchId, run, readOnly = false }: Props) {
                       {formatDate(turn.startedAt || turn.submittedAt)}
                     </span>
                   </div>
+
+                  {turn.codexConfig && (
+                    <details className="tx-collapsible tx-collapsible-config">
+                      <summary>
+                        <div className="tx-collapsible-summary">
+                          <span className="tx-collapsible-chevron">
+                            <ChevronRightIcon size={13} />
+                          </span>
+                          <span className="tx-collapsible-copy">
+                            <span className="tx-collapsible-label">Config</span>
+                            <span className="tx-collapsible-title">Codex launch settings for this turn</span>
+                          </span>
+                          <span className="tx-collapsible-badges">
+                            <span className="tx-collapsible-badge">{turn.codexConfig.launchMode}</span>
+                            {turn.codexConfig.developerPrompt && (
+                              <span className="tx-collapsible-badge">developer prompt</span>
+                            )}
+                          </span>
+                        </div>
+                      </summary>
+                      <div className="tx-collapsible-body">
+                        <pre className="code-block tx-config-block">{formatCodexTurnConfig(turn)}</pre>
+                      </div>
+                    </details>
+                  )}
 
                   {turn.items.length === 0 ? (
                     <div className="tx-agent-placeholder">

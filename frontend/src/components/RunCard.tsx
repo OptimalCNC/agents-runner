@@ -10,7 +10,11 @@ export function RunCard({ run }: Props) {
   const selectedRunId = useAppStore((s) => s.selectedRunId);
   const isSelected = run.id === selectedRunId;
   const reviewSummary = run.review?.statusShort.split("\n")[0].trim();
-  const scoreLabel = run.score === null || run.score === undefined ? "" : `Score ${run.score}`;
+  const scoreLabel = run.score === null || run.score === undefined
+    ? ""
+    : run.kind === "reviewer"
+      ? `Score ${run.score}`
+      : `Avg ${run.score}`;
   const rankLabel = run.rank ? `#${run.rank}` : "";
 
   function handleClick() {

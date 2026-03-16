@@ -31,6 +31,14 @@ function normalizeMode(value: unknown): BatchMode {
   return "repeated";
 }
 
+function getMaxConcurrency(mode: BatchMode, runCount: number, reviewCount: number): number {
+  if (mode !== "ranked") {
+    return runCount;
+  }
+
+  return Math.max(1, runCount * Math.max(1, reviewCount));
+}
+
 function getProjectFolderLabel(projectPath: string): string {
   const normalizedPath = String(projectPath ?? "").replace(/[\\/]+$/, "");
   if (!normalizedPath) {
@@ -80,8 +88,8 @@ export interface NormalizedCreateBatchPayload {
 export function normalizeCreateBatchPayload(body: Record<string, unknown>): NormalizedCreateBatchPayload {
   const mode = normalizeMode(body.mode ?? body.workflowType);
   const runCount = normalizeInteger(body.runCount, DEFAULT_RUN_COUNT, 1, MAX_BATCH_RUN_COUNT);
-  const concurrency = normalizeInteger(body.concurrency, runCount, 1, runCount);
   const reviewCount = normalizeInteger(body.reviewCount, 3, 1, MAX_BATCH_RUN_COUNT);
+  const concurrency = normalizeInteger(body.concurrency, runCount, 1, getMaxConcurrency(mode, runCount, reviewCount));
   const projectPath = normalizeString(body.projectPath);
   const worktreeRoot = normalizeString(body.worktreeRoot);
   const prompt = normalizeString(body.prompt);
