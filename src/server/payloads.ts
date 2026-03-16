@@ -20,7 +20,23 @@ export function normalizeString(value: unknown): string {
 }
 
 function normalizeMode(value: unknown): BatchMode {
-  return value === "generated" || value === "task-generator" ? "generated" : "repeated";
+  if (value === "generated" || value === "task-generator") {
+    return "generated";
+  }
+
+  if (value === "ranked" || value === "reviewed") {
+    return "ranked";
+  }
+
+  return "repeated";
+}
+
+function getMaxConcurrency(mode: BatchMode, runCount: number, reviewCount: number): number {
+  if (mode !== "ranked") {
+    return runCount;
+  }
+
+  return Math.max(1, runCount * Math.max(1, reviewCount));
 }
 
 function getProjectFolderLabel(projectPath: string): string {
@@ -54,10 +70,12 @@ export interface NormalizedCreateBatchPayload {
   config: {
     runCount: number;
     concurrency: number;
+    reviewCount: number;
     projectPath: string;
     worktreeRoot: string;
     prompt: string;
     taskPrompt: string;
+    reviewPrompt: string;
     baseRef: string;
     model: string;
     sandboxMode: string;
@@ -70,11 +88,13 @@ export interface NormalizedCreateBatchPayload {
 export function normalizeCreateBatchPayload(body: Record<string, unknown>): NormalizedCreateBatchPayload {
   const mode = normalizeMode(body.mode ?? body.workflowType);
   const runCount = normalizeInteger(body.runCount, DEFAULT_RUN_COUNT, 1, MAX_BATCH_RUN_COUNT);
-  const concurrency = normalizeInteger(body.concurrency, runCount, 1, runCount);
+  const reviewCount = normalizeInteger(body.reviewCount, 3, 1, MAX_BATCH_RUN_COUNT);
+  const concurrency = normalizeInteger(body.concurrency, runCount, 1, getMaxConcurrency(mode, runCount, reviewCount));
   const projectPath = normalizeString(body.projectPath);
   const worktreeRoot = normalizeString(body.worktreeRoot);
   const prompt = normalizeString(body.prompt);
   const taskPrompt = normalizeString(body.taskPrompt);
+  const reviewPrompt = normalizeString(body.reviewPrompt);
   const requestedTitle = normalizeString(body.title);
 
   if (!projectPath) {
@@ -89,6 +109,14 @@ export function normalizeCreateBatchPayload(body: Record<string, unknown>): Norm
     throw new Error("Task generation prompt is required for Generated mode.");
   }
 
+  if (mode === "ranked" && !prompt) {
+    throw new Error("Prompt is required for Ranked mode.");
+  }
+
+  if (mode === "ranked" && !reviewPrompt) {
+    throw new Error("Review prompt is required for Ranked mode.");
+  }
+
   const resolvedProjectPath = path.resolve(projectPath);
   const resolvedWorktreeRoot = worktreeRoot
     ? path.resolve(worktreeRoot)
@@ -101,10 +129,12 @@ export function normalizeCreateBatchPayload(body: Record<string, unknown>): Norm
     config: {
       runCount,
       concurrency,
+      reviewCount,
       projectPath: resolvedProjectPath,
       worktreeRoot: resolvedWorktreeRoot,
       prompt,
       taskPrompt,
+      reviewPrompt,
       baseRef: normalizeString(body.baseRef),
       model: normalizeString(body.model),
       sandboxMode: normalizeString(body.sandboxMode) || DEFAULT_SANDBOX_MODE,

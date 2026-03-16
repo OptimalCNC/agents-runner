@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 
-import { isRunPendingStatus } from "./runStatus";
+import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 
 import type {
   Batch,
@@ -14,6 +14,8 @@ import type {
   GenerationState,
   Run,
   RunLog,
+  RunTurn,
+  RunUsage,
 } from "../types";
 
 function clone<T>(value: T): T {
@@ -64,12 +66,217 @@ function sortBatches(batches: BatchSummary[]): BatchSummary[] {
 }
 
 function normalizeMode(value: string | undefined): BatchMode {
-  return value === "generated" || value === "task-generator" ? "generated" : "repeated";
+  if (value === "generated" || value === "task-generator") {
+    return "generated";
+  }
+
+  if (value === "ranked" || value === "reviewed") {
+    return "ranked";
+  }
+
+  return "repeated";
 }
 
 function buildBatchMeta(batch: Batch): Omit<Batch, "runs"> {
   const { runs, ...batchMeta } = clone(batch);
   return batchMeta;
+}
+
+function normalizeScore(value: unknown): number | null {
+  const parsed = Number(String(value ?? "").trim());
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function getLatestRunTurn(run: Run): RunTurn | null {
+  return run.turns.at(-1) ?? null;
+}
+
+function mergeUsage(left: RunUsage | null, right: RunUsage | null): RunUsage | null {
+  if (!left && !right) {
+    return null;
+  }
+
+  return {
+    input_tokens: Number(left?.input_tokens ?? 0) + Number(right?.input_tokens ?? 0),
+    output_tokens: Number(left?.output_tokens ?? 0) + Number(right?.output_tokens ?? 0),
+    total_tokens:
+      (left?.total_tokens != null || right?.total_tokens != null)
+        ? Number(left?.total_tokens ?? 0) + Number(right?.total_tokens ?? 0)
+        : undefined,
+  };
+}
+
+function aggregateRunUsage(turns: RunTurn[]): RunUsage | null {
+  return turns.reduce<RunUsage | null>((acc, turn) => mergeUsage(acc, turn.usage), null);
+}
+
+function getLatestTurnResponse(turns: RunTurn[]): string {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (turns[index].finalResponse) {
+      return turns[index].finalResponse;
+    }
+  }
+
+  return "";
+}
+
+function syncRunDerivedState(run: Run): void {
+  const latestTurn = getLatestRunTurn(run);
+  run.status = latestTurn?.status ?? run.status;
+  run.completedAt = latestTurn?.completedAt ?? null;
+  run.error = latestTurn?.error ?? null;
+  run.finalResponse = getLatestTurnResponse(run.turns);
+  run.usage = aggregateRunUsage(run.turns);
+  run.items = run.turns.flatMap((turn) =>
+    (turn.items || []).map((item) => ({
+      ...item,
+      id: `${turn.id}:${item.id}`,
+    })),
+  );
+
+  const firstStartedAt = run.turns.find((turn) => turn.startedAt)?.startedAt ?? null;
+  if (!run.startedAt && firstStartedAt) {
+    run.startedAt = firstStartedAt;
+  }
+}
+
+function extractReviewerScoreFromRun(reviewRun: Run): number | null {
+  for (let turnIndex = reviewRun.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = reviewRun.turns[turnIndex];
+    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = turn.items[itemIndex] as Record<string, unknown>;
+      if (item.type !== "mcp_tool_call") {
+        continue;
+      }
+
+      if (String(item.server ?? "") !== "agents-runner-workflow" || String(item.tool ?? "") !== "submit_score") {
+        continue;
+      }
+
+      if (String(item.status ?? "") !== "completed") {
+        continue;
+      }
+
+      const result = item.result as Record<string, unknown> | undefined;
+      const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
+      const score = normalizeScore(structured?.score);
+      if (score !== null) {
+        return score;
+      }
+    }
+  }
+
+  return null;
+}
+
+function deriveBatchStatus(batch: Batch): BatchStatus {
+  if (batch.cancelRequested && batch.runs.every((run) => isRunTerminalStatus(run.status))) {
+    return "cancelled";
+  }
+
+  if (batch.runs.some((run) => run.status === "failed")) {
+    return "failed";
+  }
+
+  if (batch.runs.length > 0 && batch.runs.every((run) => run.status === "completed")) {
+    return "completed";
+  }
+
+  if (batch.runs.some((run) => isRunPendingStatus(run.status))) {
+    return "running";
+  }
+
+  if (batch.cancelRequested) {
+    return "cancelled";
+  }
+
+  return "queued";
+}
+
+function reconcileTerminalRun(run: Run, batch: Batch): void {
+  const latestTurn = getLatestRunTurn(run);
+  if (!latestTurn || isRunTerminalStatus(latestTurn.status)) {
+    return;
+  }
+
+  const inferredCompletedAt = latestTurn.completedAt
+    || run.completedAt
+    || batch.completedAt
+    || run.logs.at(-1)?.at
+    || latestTurn.startedAt
+    || batch.startedAt
+    || nowIso();
+
+  if (batch.status === "completed" && !latestTurn.error) {
+    latestTurn.status = "completed";
+    latestTurn.completedAt = inferredCompletedAt;
+    return;
+  }
+
+  if (batch.status === "cancelled" || batch.cancelRequested) {
+    latestTurn.status = "cancelled";
+    latestTurn.completedAt = inferredCompletedAt;
+    latestTurn.error ||= "Batch cancelled.";
+    return;
+  }
+
+  latestTurn.status = "failed";
+  latestTurn.completedAt = inferredCompletedAt;
+  latestTurn.error ||= batch.error || "Batch failed.";
+}
+
+function recomputeRankedScores(batch: Batch): void {
+  if (batch.mode !== "ranked") {
+    return;
+  }
+
+  const scoreMap = new Map<string, number[]>();
+  const reviewerScoreMap = new Map<string, number>();
+
+  for (const reviewRun of batch.runs.filter((run) => run.kind === "reviewer")) {
+    const reviewedRunId = String(reviewRun.reviewedRunId ?? "").trim();
+    if (!reviewedRunId) {
+      continue;
+    }
+
+    const score = extractReviewerScoreFromRun(reviewRun);
+    if (score === null) {
+      continue;
+    }
+
+    reviewerScoreMap.set(reviewRun.id, score);
+    if (!scoreMap.has(reviewedRunId)) {
+      scoreMap.set(reviewedRunId, []);
+    }
+    scoreMap.get(reviewedRunId)!.push(score);
+  }
+
+  for (const run of batch.runs) {
+    if (run.kind === "reviewer") {
+      run.score = reviewerScoreMap.get(run.id) ?? null;
+    }
+  }
+
+  const candidateRuns = batch.runs.filter((run) => run.kind !== "reviewer");
+  for (const run of candidateRuns) {
+    const values = scoreMap.get(run.id) || [];
+    run.score = values.length > 0
+      ? Number((values.reduce((acc, value) => acc + value, 0) / values.length).toFixed(2))
+      : null;
+    run.rank = null;
+  }
+
+  const rankedRuns = candidateRuns
+    .filter((run) => run.score !== null)
+    .sort((left, right) => Number(right.score) - Number(left.score));
+
+  for (const [index, run] of rankedRuns.entries()) {
+    run.rank = index + 1;
+  }
 }
 
 function normalizeLoadedRun(run: Run): Run {
@@ -103,6 +310,20 @@ function normalizeLoadedRun(run: Run): Run {
   );
 
   return nextRun;
+}
+
+function normalizeLoadedBatch(batch: Batch): void {
+  for (const run of batch.runs) {
+    reconcileTerminalRun(run, batch);
+    syncRunDerivedState(run);
+  }
+
+  recomputeRankedScores(batch);
+  batch.status = deriveBatchStatus(batch);
+
+  if (batch.status === "completed" && !batch.completedAt) {
+    batch.completedAt = batch.runs.map((run) => run.completedAt).filter(Boolean).sort().at(-1) ?? nowIso();
+  }
 }
 
 function buildSummary(batch: Batch): BatchSummary {
@@ -366,6 +587,7 @@ export function createBatchStore(dataDirectory: string): BatchStore {
     }
 
     const entries = await fs.readdir(batchesRoot, { withFileTypes: true });
+    let shouldPersistNormalizedData = false;
 
     for (const entry of entries) {
       if (!entry.isDirectory()) {
@@ -409,8 +631,9 @@ export function createBatchStore(dataDirectory: string): BatchStore {
       delete batchMeta.runIds;
 
       const batch = { ...batchMeta, runs } as unknown as Batch;
+      const loadedStatus = batch.status;
 
-      if (batch.status === "running" || batch.status === "queued") {
+      if (loadedStatus === "running" || loadedStatus === "queued") {
         batch.status = "failed";
         batch.completedAt = nowIso();
         batch.error = "Interrupted by server restart.";
@@ -424,7 +647,15 @@ export function createBatchStore(dataDirectory: string): BatchStore {
         }
       }
 
+      normalizeLoadedBatch(batch);
       batches.set(batch.id, batch);
+      shouldPersistNormalizedData = true;
+      dirtyBatches.add(batch.id);
+      dirtyRuns.set(batch.id, new Set(batch.runs.map((run) => run.id)));
+    }
+
+    if (shouldPersistNormalizedData) {
+      schedulePersist();
     }
   }
 

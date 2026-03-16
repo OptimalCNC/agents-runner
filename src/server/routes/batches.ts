@@ -12,6 +12,7 @@ import {
   normalizeCreateBatchPayload,
   normalizeDeleteBatchPayload,
 } from "../payloads";
+import { getBundledMcpStatus } from "../../lib/codexMcp";
 
 export const handleBatchRoutes: ApiRouteHandler = async (context, request, response, url) => {
   if (request.method === "GET" && url.pathname === "/api/batches") {
@@ -22,6 +23,19 @@ export const handleBatchRoutes: ApiRouteHandler = async (context, request, respo
   if (request.method === "POST" && url.pathname === "/api/batches") {
     const body = await readBody(request);
     const payload = normalizeCreateBatchPayload(body);
+
+    if (payload.mode === "ranked") {
+      const mcpStatus = await getBundledMcpStatus(context.port);
+      if (!mcpStatus.healthy) {
+        sendError(
+          response,
+          409,
+          "Ranked workflow requires bundled MCP tools. Open Settings and install/repair the Agents Runner MCP server first.",
+        );
+        return true;
+      }
+    }
+
     const batch = context.store.createBatch(payload);
 
     if (payload.autoGenerateTitle) {

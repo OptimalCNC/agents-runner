@@ -5,12 +5,14 @@ import {
   collectManagedWorktrees,
   negotiateMcpProtocolVersion,
 } from "../lib/mcpGit";
+import { submitManagedRunScore } from "../lib/mcpReview";
 
 import type { ServerContext } from "./context";
 
 const JSON_RPC_VERSION = "2.0";
-const MCP_SERVER_NAME = "agents-runner-git";
-const MCP_TOOL_NAME = "create_commit";
+const MCP_SERVER_NAME = "agents-runner-workflow";
+const MCP_TOOL_NAME_CREATE_COMMIT = "create_commit";
+const MCP_TOOL_NAME_SUBMIT_SCORE = "submit_score";
 const MCP_SESSION_HEADER = "mcp-session-id";
 const MCP_PROTOCOL_HEADER = "mcp-protocol-version";
 const MCP_SERVER_VERSION = "0.1.0";
@@ -100,9 +102,58 @@ function buildCreateCommitToolDefinition(): Record<string, unknown> {
   };
 
   return {
-    name: MCP_TOOL_NAME,
+    name: MCP_TOOL_NAME_CREATE_COMMIT,
     title: "Create Commit",
     description: "Stage only the selected files in a managed Agents Runner worktree and create a single git commit.",
+    inputSchema,
+    input_schema: inputSchema,
+    annotations: {
+      readOnlyHint: false,
+      read_only_hint: false,
+      idempotentHint: false,
+      idempotent_hint: false,
+      openWorldHint: false,
+      open_world_hint: false,
+    },
+  };
+}
+
+
+
+function buildSubmitScoreToolDefinition(): Record<string, unknown> {
+  const inputSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["working_folder", "reviewed_run_id", "score", "reason"],
+    properties: {
+      working_folder: {
+        type: "string",
+        minLength: 1,
+        description: "Absolute path to the reviewed run worktree root returned by git rev-parse --show-toplevel.",
+      },
+      reviewed_run_id: {
+        type: "string",
+        minLength: 1,
+        description: "Run id being reviewed (for example run-1).",
+      },
+      score: {
+        type: "number",
+        minimum: 0,
+        maximum: 100,
+        description: "Numeric score for the reviewed run.",
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+        description: "Concise reason for the score.",
+      },
+    },
+  };
+
+  return {
+    name: MCP_TOOL_NAME_SUBMIT_SCORE,
+    title: "Submit Score",
+    description: "Submit a reviewer score for exactly one managed Agents Runner run.",
     inputSchema,
     input_schema: inputSchema,
     annotations: {
@@ -134,7 +185,7 @@ function buildInitializeResult(protocolVersion: string): Record<string, unknown>
     capabilities,
     serverInfo,
     server_info: serverInfo,
-    instructions: "Use create_commit to create exactly one commit inside a managed Agents Runner run worktree.",
+    instructions: "Use create_commit for candidate commits and submit_score for reviewer scoring in managed Agents Runner worktrees.",
   };
 }
 
@@ -151,6 +202,27 @@ function buildCreateCommitToolResult(result: Awaited<ReturnType<typeof createMan
       {
         type: "text",
         text: summaryLine,
+      },
+    ],
+    structuredContent: result,
+    structured_content: result,
+    isError: false,
+    is_error: false,
+  };
+}
+
+
+
+function buildSubmitScoreToolResult(result: Awaited<ReturnType<typeof submitManagedRunScore>>): Record<string, unknown> {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Submitted score ${result.score} for ${result.reviewedRunId}.`,
+      },
+      {
+        type: "text",
+        text: result.reason,
       },
     ],
     structuredContent: result,
@@ -231,7 +303,7 @@ export async function handleMcpRequest(
   response: ServerResponse,
   url: URL,
 ): Promise<boolean> {
-  if (url.pathname !== "/mcp/git") {
+  if (url.pathname !== "/mcp/workflow") {
     return false;
   }
 
@@ -304,15 +376,16 @@ export async function handleMcpRequest(
         sendJsonRpcResult(response, id, {}, protocolVersion, sessionId);
         return true;
       case "tools/list":
-        sendJsonRpcResult(response, id, { tools: [buildCreateCommitToolDefinition()] }, protocolVersion, sessionId);
+        sendJsonRpcResult(response, id, { tools: [buildCreateCommitToolDefinition(), buildSubmitScoreToolDefinition()] }, protocolVersion, sessionId);
         return true;
       case "tools/call": {
         const callParams = (params && typeof params === "object") ? params as Record<string, unknown> : {};
-        if (callParams.name !== MCP_TOOL_NAME) {
+        const toolName = String(callParams.name ?? "").trim();
+        if (!toolName) {
           sendJsonRpcError(
             response,
             id,
-            { code: -32602, message: `Unknown tool ${(callParams.name as string) || "<missing>"}.` },
+            { code: -32602, message: "Tool name is required." },
             protocolVersion,
             sessionId,
           );
@@ -320,8 +393,26 @@ export async function handleMcpRequest(
         }
 
         const managedWorktrees = await collectManagedWorktrees(context.store);
-        const result = await createManagedWorktreeCommit(managedWorktrees, callParams.arguments);
-        sendJsonRpcResult(response, id, buildCreateCommitToolResult(result), protocolVersion, sessionId);
+
+        if (toolName === MCP_TOOL_NAME_CREATE_COMMIT) {
+          const result = await createManagedWorktreeCommit(managedWorktrees, callParams.arguments);
+          sendJsonRpcResult(response, id, buildCreateCommitToolResult(result), protocolVersion, sessionId);
+          return true;
+        }
+
+        if (toolName === MCP_TOOL_NAME_SUBMIT_SCORE) {
+          const result = await submitManagedRunScore(managedWorktrees, callParams.arguments);
+          sendJsonRpcResult(response, id, buildSubmitScoreToolResult(result), protocolVersion, sessionId);
+          return true;
+        }
+
+        sendJsonRpcError(
+          response,
+          id,
+          { code: -32602, message: `Unknown tool ${toolName}.` },
+          protocolVersion,
+          sessionId,
+        );
         return true;
       }
       default:

@@ -6,6 +6,117 @@ import { RunDetail } from "./RunDetail.js";
 import { ClockIcon, FolderIcon, GitIcon, XIcon, PlayIcon } from "../icons.js";
 import { formatDate, formatRelative, formatModeLabel } from "../utils/format.js";
 import { summarizeRunCounts } from "../utils/runStatus.js";
+import type { Run } from "../types.js";
+
+interface ReviewerGlance {
+  run: Run;
+  score: number | null;
+  reason: string;
+}
+
+function normalizeScore(value: unknown): number | null {
+  const parsed = Number(String(value ?? "").trim());
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function parseReviewerGlance(run: Run): ReviewerGlance {
+  const fallbackScore = typeof run.score === "number" ? run.score : null;
+
+  for (let turnIndex = run.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = run.turns[turnIndex];
+    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = turn.items[itemIndex] as Record<string, unknown>;
+      if (item.type !== "mcp_tool_call") {
+        continue;
+      }
+
+      if (String(item.server ?? "") !== "agents-runner-workflow" || String(item.tool ?? "") !== "submit_score") {
+        continue;
+      }
+
+      const result = item.result as Record<string, unknown> | undefined;
+      const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
+      const score = normalizeScore(structured?.score) ?? fallbackScore;
+      const reason = String(structured?.reason ?? "").trim();
+      return { run, score, reason };
+    }
+  }
+
+  if (!run.finalResponse) {
+    return { run, score: fallbackScore, reason: "" };
+  }
+
+  return { run, score: fallbackScore, reason: run.finalResponse.trim() };
+}
+
+function formatRunStatusLabel(status: Run["status"]): string {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "preparing":
+      return "Preparing";
+    case "waiting_for_codex":
+      return "Waiting";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return status;
+  }
+}
+
+function buildReviewerGlanceMeta(entry: ReviewerGlance): string {
+  const statusLabel = formatRunStatusLabel(entry.run.status);
+  return entry.score === null ? statusLabel : `${statusLabel} · Score ${entry.score}`;
+}
+
+function buildReviewerGlanceReason(entry: ReviewerGlance): string {
+  if (entry.reason) {
+    return entry.reason;
+  }
+
+  if (entry.run.error) {
+    return entry.run.error;
+  }
+
+  switch (entry.run.status) {
+    case "queued":
+      return "Starts after the candidate run is ready.";
+    case "preparing":
+      return "Preparing the reviewer workspace.";
+    case "waiting_for_codex":
+      return "Waiting for Codex to start.";
+    case "running":
+      return "Reviewer is still evaluating this run.";
+    case "completed":
+      return "Open the reviewer run for details.";
+    case "failed":
+      return "Reviewer run failed before submitting a score.";
+    case "cancelled":
+      return "Reviewer run was cancelled.";
+    default:
+      return "Open the reviewer run for details.";
+  }
+}
+
+function buildRunsSummaryLabel(batch: { mode: string; runs: Run[]; config: { runCount: number } }): string {
+  if (batch.mode !== "ranked") {
+    return `${batch.runs.length} / ${batch.config.runCount}`;
+  }
+
+  const candidateCount = batch.runs.filter((run) => run.kind !== "reviewer").length;
+  const reviewerCount = batch.runs.filter((run) => run.kind === "reviewer").length;
+  return `${candidateCount} candidates · ${reviewerCount} reviews`;
+}
 
 export function BatchDetail() {
   const batch = useAppStore(selectSelectedBatch);
@@ -40,6 +151,38 @@ export function BatchDetail() {
   const waitingForCodexRuns = batch.runs.filter((r) => r.status === "waiting_for_codex").length;
   const runningRuns = batch.runs.filter((r) => r.status === "running").length;
   const queuedRuns = batch.runs.filter((r) => r.status === "queued").length;
+
+  const candidateRuns = batch.runs
+    .filter((run) => run.kind !== "reviewer")
+    .sort((left, right) => {
+      if (left.rank && right.rank) {
+        return left.rank - right.rank;
+      }
+
+      if (left.rank) {
+        return -1;
+      }
+
+      if (right.rank) {
+        return 1;
+      }
+
+      return Number(right.score ?? -1) - Number(left.score ?? -1);
+    });
+
+  const reviewerByCandidate = new Map<string, ReviewerGlance[]>();
+  for (const reviewRun of batch.runs.filter((run) => run.kind === "reviewer")) {
+    const targetRunId = String(reviewRun.reviewedRunId ?? "").trim();
+    if (!targetRunId) {
+      continue;
+    }
+
+    if (!reviewerByCandidate.has(targetRunId)) {
+      reviewerByCandidate.set(targetRunId, []);
+    }
+
+    reviewerByCandidate.get(targetRunId)!.push(parseReviewerGlance(reviewRun));
+  }
 
   async function handleCancel() {
     try {
@@ -86,7 +229,7 @@ export function BatchDetail() {
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Runs</span>
-          <span className="meta-item-value">{batch.runs.length} / {batch.config.runCount}</span>
+          <span className="meta-item-value">{buildRunsSummaryLabel(batch)}</span>
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Concurrency</span>
@@ -160,6 +303,52 @@ export function BatchDetail() {
             <p className="empty-title">Waiting for runs</p>
             <p className="empty-desc">Work items appear once the batch creates them.</p>
           </div>
+        ) : batch.mode === "ranked" ? (
+          <>
+            <div className="ranked-candidate-grid">
+              {candidateRuns.map((candidateRun) => {
+                const glanceEntries = (reviewerByCandidate.get(candidateRun.id) || [])
+                  .sort((left, right) => left.run.index - right.run.index);
+                const scoredCount = glanceEntries.filter((entry) => entry.score !== null).length;
+                const expectedReviewCount = Math.max(batch.config.reviewCount, glanceEntries.length);
+
+                return (
+                  <div key={candidateRun.id} className="ranked-candidate-item">
+                    <RunCard run={candidateRun} />
+                    <div className="ranked-review-glance">
+                      <div className="ranked-review-glance-header">
+                        <span className="ranked-review-glance-title">Reviewer glance</span>
+                        <span className="ranked-review-glance-count">{scoredCount}/{expectedReviewCount} scored</span>
+                      </div>
+                      {glanceEntries.length === 0 ? (
+                        <div className="ranked-review-empty">Reviewer runs will appear once the candidate run is ready.</div>
+                      ) : (
+                        <div className="ranked-review-glance-list">
+                          {glanceEntries.map((entry, index) => (
+                            <button
+                              key={entry.run.id}
+                              className={`ranked-review-glance-item${selectedRunId === entry.run.id ? " is-selected" : ""}`}
+                              type="button"
+                              onClick={() => useAppStore.getState().selectRun(entry.run.id)}
+                            >
+                              <span className="ranked-review-glance-item-top">
+                                <span className="ranked-review-glance-item-label">Review {index + 1}</span>
+                                <span className="ranked-review-glance-item-meta">{buildReviewerGlanceMeta(entry)}</span>
+                              </span>
+                              <span className="ranked-review-glance-item-reason">
+                                {buildReviewerGlanceReason(entry)}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+          </>
         ) : (
           <div className="runs-grid">
             {batch.runs.map((run) => (

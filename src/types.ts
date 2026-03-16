@@ -30,10 +30,12 @@ export type GenerationStatus =
 export interface BatchConfig {
   runCount: number;
   concurrency: number;
+  reviewCount: number;
   projectPath: string;
   worktreeRoot: string;
   prompt: string;
   taskPrompt: string;
+  reviewPrompt: string;
   baseRef: string;
   model: string;
   sandboxMode: string;
@@ -97,6 +99,25 @@ export interface RunUsage {
   [key: string]: unknown;
 }
 
+export interface CodexSessionConfig {
+  model: string | null;
+  sandboxMode: string;
+  approvalPolicy: string;
+  workingDirectory: string;
+  networkAccessEnabled: boolean;
+  webSearchEnabled: boolean;
+  webSearchMode: string;
+  modelReasoningEffort: string | null;
+}
+
+export interface CodexTurnConfig {
+  launchMode: "start" | "resume";
+  developerPrompt: string | null;
+  clientConfig: Record<string, unknown>;
+  sessionConfig: CodexSessionConfig;
+  resumeThreadId: string | null;
+}
+
 export interface RunTurn {
   id: string;
   index: number;
@@ -108,6 +129,7 @@ export interface RunTurn {
   finalResponse: string;
   error: string | null;
   usage: RunUsage | null;
+  codexConfig?: CodexTurnConfig | null;
   items: StreamItem[];
 }
 
@@ -130,6 +152,10 @@ export interface Run {
   turns: RunTurn[];
   items: StreamItem[];
   review: RunReview | null;
+  kind?: "candidate" | "reviewer";
+  score?: number | null;
+  rank?: number | null;
+  reviewedRunId?: string | null;
 }
 
 // --- Stream items (discriminated union) ---
@@ -212,7 +238,7 @@ export type StreamItem =
 
 // --- Batch ---
 
-export type BatchMode = "repeated" | "generated";
+export type BatchMode = "repeated" | "generated" | "ranked";
 
 export interface Batch {
   id: string;
@@ -363,6 +389,13 @@ export interface CreateCommitToolResult {
   message: string;
   stagedFiles: string[];
   statSummary: string;
+}
+
+export interface SubmitScoreToolResult {
+  workingFolder: string;
+  reviewedRunId: string;
+  score: number;
+  reason: string;
 }
 
 // --- Codex models ---

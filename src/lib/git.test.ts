@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 async function createTempRepo(): Promise<string> {
-  const repoRoot = await fs.mkdtemp(path.join("/tmp", "agents-runner-git-test-"));
+  const repoRoot = await fs.mkdtemp(path.join("/tmp", "agents-runner-workflow-test-"));
   tempDirectories.push(repoRoot);
 
   await runCommand("git", ["init", "-b", "main", repoRoot]);

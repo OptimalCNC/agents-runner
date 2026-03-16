@@ -49,7 +49,7 @@ test("getBundledMcpStatus reports a healthy install when config matches the expe
   const endpointUrl = buildBundledMcpEndpointUrl(3010);
 
   await writeConfig(codexHome, [
-    "[mcp_servers.agents-runner-git]",
+    "[mcp_servers.agents-runner-workflow]",
     `url = "${endpointUrl}"`,
     "",
   ].join("\n"));
@@ -69,8 +69,8 @@ test("getBundledMcpStatus reports repair details when config points to the wrong
   const codexHome = await createCodexHome();
 
   await writeConfig(codexHome, [
-    "[mcp_servers.agents-runner-git]",
-    'url = "http://127.0.0.1:9999/mcp/git"',
+    "[mcp_servers.agents-runner-workflow]",
+    'url = "http://127.0.0.1:9999/mcp/workflow"',
     "",
   ].join("\n"));
 
@@ -90,8 +90,8 @@ test("installBundledMcpServer removes stale config and verifies the repaired ins
   const recordedArgs: string[][] = [];
 
   await writeConfig(codexHome, [
-    "[mcp_servers.agents-runner-git]",
-    'url = "http://127.0.0.1:9999/mcp/git"',
+    "[mcp_servers.agents-runner-workflow]",
+    'url = "http://127.0.0.1:9999/mcp/workflow"',
     "",
   ].join("\n"));
 
@@ -106,7 +106,7 @@ test("installBundledMcpServer removes stale config and verifies the repaired ins
 
       if (args[0] === "mcp" && args[1] === "add") {
         await writeConfig(codexHome, [
-          "[mcp_servers.agents-runner-git]",
+          "[mcp_servers.agents-runner-workflow]",
           `url = "${expectedUrl}"`,
           "",
         ].join("\n"));
@@ -123,7 +123,7 @@ test("installBundledMcpServer removes stale config and verifies the repaired ins
 
   expect(result.healthy).toBe(true);
   expect(recordedArgs).toEqual([
-    ["mcp", "remove", "agents-runner-git"],
-    ["mcp", "add", "agents-runner-git", "--url", expectedUrl],
+    ["mcp", "remove", "agents-runner-workflow"],
+    ["mcp", "add", "agents-runner-workflow", "--url", expectedUrl],
   ]);
 });

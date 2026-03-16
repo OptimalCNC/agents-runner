@@ -23,8 +23,10 @@ export function formatStatus(value: string | null | undefined): string {
   return (value ?? "").replace(/-/g, " ");
 }
 
-export function normalizeMode(value: string | null | undefined): "repeated" | "generated" {
-  return value === "generated" || value === "task-generator" ? "generated" : "repeated";
+export function normalizeMode(value: string | null | undefined): "repeated" | "generated" | "ranked" {
+  if (value === "generated" || value === "task-generator") return "generated";
+  if (value === "ranked" || value === "reviewed") return "ranked";
+  return "repeated";
 }
 
 export function formatModeLabel(value: string | null | undefined): string {

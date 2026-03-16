@@ -38,7 +38,7 @@ export function negotiateMcpProtocolVersion(requestedVersion: unknown): string {
     : LATEST_AGENTS_RUNNER_MCP_PROTOCOL_VERSION;
 }
 
-async function normalizeExistingDirectory(targetPath: string): Promise<string> {
+export async function normalizeExistingDirectory(targetPath: string): Promise<string> {
   return fs.realpath(targetPath).catch(() => path.resolve(targetPath));
 }
 

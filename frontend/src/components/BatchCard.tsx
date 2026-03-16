@@ -38,14 +38,18 @@ export function BatchCard({ summary }: Props) {
       <div className="batch-card-top">
         <div className="batch-card-info">
           <div className="batch-card-title">{summary.title}</div>
-          <div className="batch-card-meta">
-            {formatModeLabel(summary.mode)} &middot; {formatRelative(summary.createdAt)}
-          </div>
-          {projectFolder && (
-            <div className="batch-card-project" title={projectPath}>
-              <FolderIcon /><span>{projectFolder}</span>
+          <div className="batch-card-meta">{formatRelative(summary.createdAt)}</div>
+          <div className="batch-card-tags">
+            <div className="batch-card-tag batch-card-tag-mode" title={`Mode: ${formatModeLabel(summary.mode)}`}>
+              <span className="batch-card-tag-key">Mode</span>
+              <span>{formatModeLabel(summary.mode)}</span>
             </div>
-          )}
+            {projectFolder && (
+              <div className="batch-card-tag batch-card-project" title={projectPath}>
+                <FolderIcon /><span>{projectFolder}</span>
+              </div>
+            )}
+          </div>
         </div>
         <div className="batch-card-actions">
           <StatusPill status={summary.status} />
