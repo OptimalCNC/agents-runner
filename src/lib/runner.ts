@@ -1407,6 +1407,10 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
     throw new Error("Run not found.");
   }
 
+  if (runSnapshot.kind === "reviewer") {
+    throw new Error("Reviewer runs are read-only and cannot be continued.");
+  }
+
   if (!runSnapshot.threadId) {
     throw new Error("This run does not have a resumable Codex thread yet.");
   }

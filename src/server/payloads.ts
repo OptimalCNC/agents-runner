@@ -101,6 +101,10 @@ export function normalizeCreateBatchPayload(body: Record<string, unknown>): Norm
     throw new Error("Task generation prompt is required for Generated mode.");
   }
 
+  if (mode === "ranked" && !prompt) {
+    throw new Error("Prompt is required for Ranked mode.");
+  }
+
   if (mode === "ranked" && !reviewPrompt) {
     throw new Error("Review prompt is required for Ranked mode.");
   }

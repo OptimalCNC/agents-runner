@@ -44,6 +44,15 @@ export function RunDetail({ run }: Props) {
   const selectedBatch = useAppStore(selectSelectedBatch);
   const activePanel = useAppStore((state) => state.activeTab);
 
+  const rankedSessionReadOnly = selectedBatch?.mode === "ranked";
+  const showReviewPanel = run?.kind !== "reviewer";
+
+  useEffect(() => {
+    if (activePanel === "review" && !showReviewPanel) {
+      useAppStore.getState().selectTab("session");
+    }
+  }, [activePanel, showReviewPanel]);
+
   if (!run) {
     return (
       <div className="run-detail">
@@ -65,18 +74,10 @@ export function RunDetail({ run }: Props) {
 
   const directory = run.workingDirectory || run.worktreePath || "Pending";
   const usageSummary = formatUsageSummary(run);
-  const rankedSessionReadOnly = selectedBatch?.mode === "ranked";
-  const showReviewPanel = run.kind !== "reviewer";
   const panels: { key: RunDetailTab; label: string }[] = [
     { key: "session", label: "Session" },
     ...(showReviewPanel ? [{ key: "review", label: "Review" } as const] : []),
   ];
-
-  useEffect(() => {
-    if (activePanel === "review" && !showReviewPanel) {
-      useAppStore.getState().selectTab("session");
-    }
-  }, [activePanel, showReviewPanel]);
 
   return (
     <div className="run-detail">
