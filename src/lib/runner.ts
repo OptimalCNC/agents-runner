@@ -523,30 +523,31 @@ function normalizeNumericScore(value: unknown): number | null {
   return Math.max(0, Math.min(100, parsed));
 }
 
-function buildAutoCommitPrompt(prompt: string): string {
+function buildAutoCommitPrompt(prompt: string, branchName: string): string {
   return [
     prompt.trim(),
     "",
     "IMPORTANT GIT WORKFLOW:",
-    "- Create a branch for this run if one already does not exist.",
-    "- Implement the task.",
-    "- Stage only relevant files.",
-    "- Commit your changes with a clear commit message.",
+    `- Use branch ${branchName}.`,
+    "- Implement the task and finalize with exactly one commit.",
+    "- Use the MCP server \"agents-runner-git\" tool \"create_commit\" to create that commit.",
+    "- Do not run git commit directly.",
+    "- For create_commit.working_folder, use the worktree root from `git rev-parse --show-toplevel`.",
+    "- For create_commit.files, include only files relevant to this task.",
+    "- For create_commit.message, provide a concise commit message.",
     "- In your final response, include the branch name and commit SHA.",
   ].join("\n");
 }
 
 function buildReviewPrompt(batch: Batch, candidateRun: Run): string {
-  const branchName = getRunCreatedBranchName(candidateRun) || "(branch unavailable)";
+  const candidateBranch = getRunCreatedBranchName(candidateRun) || "(branch unavailable)";
+  const baseBranch = candidateRun.baseRef || batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "(base unavailable)";
 
   return [
     batch.config.reviewPrompt.trim(),
     "",
-    "You are scoring exactly one candidate run in read-only mode.",
-    `Candidate run id: ${candidateRun.id}`,
-    `Candidate run title: ${candidateRun.title}`,
-    `Candidate branch: ${branchName}`,
-    "Use git inspection to evaluate this run.",
+    `Candidate branch: ${candidateBranch}`,
+    `Base branch: ${baseBranch}`,
     "Return strict JSON only in this format:",
     '{"score":0,"reason":"..."}',
     "Score range: 0..100.",
@@ -1105,14 +1106,14 @@ async function executeRun(
         : `Worktree ready at ${worktreePath}.`);
     });
 
+    let createdBranchName: string | null = null;
     if (options.autoCreateBranch && worktreePath) {
-      const branchName = `batch/${batchId}/${runId}`;
-      await createWorktreeBranch(worktreePath, branchName);
+      createdBranchName = `batch/${batchId}/${runId}`;
+      await createWorktreeBranch(worktreePath, createdBranchName);
       store.updateRun(batchId, runId, (run) => {
-        appendLog(run, "info", `Created branch ${branchName}.`);
+        appendLog(run, "info", `Created branch ${createdBranchName}.`);
       });
     }
-
 
     const codex = getCodexClient();
     const thread = codex.startThread({
@@ -1126,7 +1127,7 @@ async function executeRun(
       modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
     });
 
-    const runPrompt = options.promptOverride || runSnapshot.prompt;
+    const runPrompt = options.promptOverride || (createdBranchName ? buildAutoCommitPrompt(runSnapshot.prompt, createdBranchName) : runSnapshot.prompt);
     const { events } = await thread.runStreamed(runPrompt, {
       signal: controller.signal,
     });
@@ -1241,7 +1242,6 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
 
       await executeRun(store, batchId, run.id, projectContext, {
         autoCreateBranch: mutableBatch.mode === "ranked",
-        promptOverride: mutableBatch.mode === "ranked" ? buildAutoCommitPrompt(run.prompt) : undefined,
       });
     });
 

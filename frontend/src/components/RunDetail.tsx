@@ -1,7 +1,7 @@
 import { Suspense, lazy } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Run } from "../types.js";
-import { useAppStore } from "../state/store.js";
+import { useAppStore, selectSelectedBatch } from "../state/store.js";
 import type { RunDetailTab } from "../state/navigation.js";
 import { formatDate } from "../utils/format.js";
 import { StatusPill } from "./StatusPill.js";
@@ -41,6 +41,7 @@ function formatUsageSummary(run: Run): string {
 export function RunDetail({ run }: Props) {
   const [logsOpen, setLogsOpen] = useState(false);
   const selectedBatchId = useAppStore((state) => state.selectedBatchId);
+  const selectedBatch = useAppStore(selectSelectedBatch);
   const activePanel = useAppStore((state) => state.activeTab);
 
   if (!run) {
@@ -64,10 +65,18 @@ export function RunDetail({ run }: Props) {
 
   const directory = run.workingDirectory || run.worktreePath || "Pending";
   const usageSummary = formatUsageSummary(run);
+  const rankedSessionReadOnly = selectedBatch?.mode === "ranked";
+  const showReviewPanel = run.kind !== "reviewer";
   const panels: { key: RunDetailTab; label: string }[] = [
     { key: "session", label: "Session" },
-    { key: "review", label: "Review" },
+    ...(showReviewPanel ? [{ key: "review", label: "Review" } as const] : []),
   ];
+
+  useEffect(() => {
+    if (activePanel === "review" && !showReviewPanel) {
+      useAppStore.getState().selectTab("session");
+    }
+  }, [activePanel, showReviewPanel]);
 
   return (
     <div className="run-detail">
@@ -129,9 +138,9 @@ export function RunDetail({ run }: Props) {
 
       <div className="run-detail-content">
         {activePanel === "session" && selectedBatchId && (
-          <SessionPanel batchId={selectedBatchId} run={run} />
+          <SessionPanel batchId={selectedBatchId} run={run} readOnly={rankedSessionReadOnly} />
         )}
-        {activePanel === "review" && (
+        {activePanel === "review" && showReviewPanel && (
           <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading review...</div>}>
             <ReviewTab run={run} />
           </Suspense>
