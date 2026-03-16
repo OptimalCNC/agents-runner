@@ -925,6 +925,7 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
   const controller = new AbortController();
   execution.runControllers.set(runId, controller);
 
+  const baseRef = batch.config.baseRef || projectContext.branchName || projectContext.headSha;
   let worktreePath: string | null = null;
 
   store.updateRun(batchId, runId, (run) => {
@@ -945,7 +946,6 @@ async function executeRun(store: BatchStore, batchId: string, runId: string, pro
   });
 
   try {
-    const baseRef = batch.config.baseRef || projectContext.branchName || projectContext.headSha;
     worktreePath = await createWorktree({
       repoRoot: projectContext.repoRoot,
       projectPath: projectContext.projectPath,
