@@ -64,7 +64,15 @@ function sortBatches(batches: BatchSummary[]): BatchSummary[] {
 }
 
 function normalizeMode(value: string | undefined): BatchMode {
-  return value === "generated" || value === "task-generator" ? "generated" : "repeated";
+  if (value === "generated" || value === "task-generator") {
+    return "generated";
+  }
+
+  if (value === "ranked" || value === "reviewed") {
+    return "ranked";
+  }
+
+  return "repeated";
 }
 
 function buildBatchMeta(batch: Batch): Omit<Batch, "runs"> {

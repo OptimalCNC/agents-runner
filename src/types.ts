@@ -30,10 +30,12 @@ export type GenerationStatus =
 export interface BatchConfig {
   runCount: number;
   concurrency: number;
+  reviewCount: number;
   projectPath: string;
   worktreeRoot: string;
   prompt: string;
   taskPrompt: string;
+  reviewPrompt: string;
   baseRef: string;
   model: string;
   sandboxMode: string;
@@ -130,6 +132,10 @@ export interface Run {
   turns: RunTurn[];
   items: StreamItem[];
   review: RunReview | null;
+  kind?: "candidate" | "reviewer";
+  score?: number | null;
+  rank?: number | null;
+  reviewedRunId?: string | null;
 }
 
 // --- Stream items (discriminated union) ---
@@ -212,7 +218,7 @@ export type StreamItem =
 
 // --- Batch ---
 
-export type BatchMode = "repeated" | "generated";
+export type BatchMode = "repeated" | "generated" | "ranked";
 
 export interface Batch {
   id: string;

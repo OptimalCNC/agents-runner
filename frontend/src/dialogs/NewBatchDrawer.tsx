@@ -36,7 +36,7 @@ export function NewBatchDrawer() {
   const inspect = useAppStore((s) => s.projectInspect);
   const modelCatalog = useAppStore((s) => s.modelCatalog);
 
-  const [mode, setMode] = useState<"repeated" | "generated">("repeated");
+  const [mode, setMode] = useState<"repeated" | "generated" | "ranked">("repeated");
   const [projectPath, setProjectPath] = useState("");
   const [recentProjectPaths, setRecentProjectPaths] = useState<string[]>([]);
   const [worktreeRoot, setWorktreeRoot] = useState("");
@@ -44,6 +44,8 @@ export function NewBatchDrawer() {
   const [concurrency, setConcurrency] = useState("10");
   const [prompt, setPrompt] = useState("");
   const [taskPrompt, setTaskPrompt] = useState("");
+  const [reviewPrompt, setReviewPrompt] = useState("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
+  const [reviewCount, setReviewCount] = useState("3");
   const [baseRef, setBaseRef] = useState("");
   const [model, setModel] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
@@ -69,6 +71,8 @@ export function NewBatchDrawer() {
     setConcurrency(String(c?.defaults?.runCount ?? 10));
     setPrompt("");
     setTaskPrompt("");
+    setReviewPrompt("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
+    setReviewCount("3");
     setBaseRef("");
     setModel("");
     setReasoningEffort("");
@@ -181,7 +185,7 @@ export function NewBatchDrawer() {
   const canSubmit =
     projectPath.trim().length > 0 &&
     Boolean(inspect) &&
-    (mode === "repeated" ? prompt.trim().length > 0 : taskPrompt.trim().length > 0);
+    ((mode === "repeated" || mode === "ranked") ? prompt.trim().length > 0 : taskPrompt.trim().length > 0) && (mode !== "ranked" || reviewPrompt.trim().length > 0);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -197,6 +201,8 @@ export function NewBatchDrawer() {
         concurrency: Number(concurrency),
         prompt: prompt.trim(),
         taskPrompt: taskPrompt.trim(),
+        reviewPrompt: reviewPrompt.trim(),
+        reviewCount: Number(reviewCount),
         baseRef: baseRef.trim(),
         model: model.trim(),
         reasoningEffort,
@@ -288,6 +294,17 @@ export function NewBatchDrawer() {
                   <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                 </svg>
                 Generated
+              </button>
+              <button
+                className={`seg-btn${mode === "ranked" ? " is-active" : ""}`}
+                data-mode="ranked"
+                type="button"
+                onClick={() => setMode("ranked")}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                </svg>
+                Ranked
               </button>
             </div>
           </div>
@@ -442,7 +459,7 @@ export function NewBatchDrawer() {
                 onChange={(e) => setPrompt(e.target.value)}
               />
             </div>
-          ) : (
+          ) : mode === "generated" ? (
             <div className="form-section">
               <label className="form-label" htmlFor="taskPrompt">Task Generation Prompt</label>
               <textarea
@@ -454,6 +471,46 @@ export function NewBatchDrawer() {
                 onChange={(e) => setTaskPrompt(e.target.value)}
               />
             </div>
+          ) : (
+            <>
+              <div className="form-section">
+                <label className="form-label" htmlFor="prompt">Task Prompt</label>
+                <textarea
+                  id="prompt"
+                  name="prompt"
+                  rows={8}
+                  value={prompt}
+                  placeholder="Describe the coding task each candidate agent should execute."
+                  onChange={(e) => setPrompt(e.target.value)}
+                />
+              </div>
+              <div className="form-grid-2">
+                <div className="form-section">
+                  <label className="form-label" htmlFor="reviewCount">Review Runs</label>
+                  <input
+                    id="reviewCount"
+                    name="reviewCount"
+                    min="1"
+                    max="50"
+                    type="number"
+                    value={reviewCount}
+                    required
+                    onChange={(e) => setReviewCount(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="form-section">
+                <label className="form-label" htmlFor="reviewPrompt">Review Prompt</label>
+                <textarea
+                  id="reviewPrompt"
+                  name="reviewPrompt"
+                  rows={6}
+                  value={reviewPrompt}
+                  placeholder="Tell reviewer agents how to score candidate runs."
+                  onChange={(e) => setReviewPrompt(e.target.value)}
+                />
+              </div>
+            </>
           )}
 
           {/* Execution Options */}
@@ -549,6 +606,10 @@ export function NewBatchDrawer() {
                 setConcurrency(String(c?.defaults?.runCount ?? 10));
                 setPrompt("");
                 setTaskPrompt("");
+                setReviewPrompt("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
+                setReviewCount("3");
+    setReviewPrompt("Score each candidate run from 0 to 100 by code quality, correctness, and completeness.");
+    setReviewCount("3");
                 setBaseRef("");
                 setModel("");
                 setReasoningEffort("");
