@@ -72,7 +72,7 @@ export const handleProjectWorktreeRoutes: ApiRouteHandler = async (context, requ
       return true;
     }
 
-    const review = await collectWorktreeReview(run.worktreePath);
+    const review = await collectWorktreeReview(run.worktreePath, run.baseRef);
     context.store.updateRun(batchId, runId, (mutableRun) => {
       mutableRun.review = review;
     });

@@ -152,8 +152,9 @@ export async function createWorktree({
   return candidate;
 }
 
-export async function collectWorktreeReview(worktreePath: string): Promise<RunReview> {
-  const [currentBranch, headSha, statusShort, diffStat, trackedDiff, untracked] = await Promise.all([
+export async function collectWorktreeReview(worktreePath: string, baseRef?: string | null): Promise<RunReview> {
+  const normalizedBaseRef = String(baseRef ?? "").trim();
+  const [currentBranch, headSha, statusShort, localDiffStat, localTrackedDiff, untracked] = await Promise.all([
     runCommand("git", ["-C", worktreePath, "branch", "--show-current"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "rev-parse", "--short=12", "HEAD"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "status", "--short"], { allowFailure: true }),
@@ -165,6 +166,28 @@ export async function collectWorktreeReview(worktreePath: string): Promise<RunRe
       allowFailure: true,
     }),
   ]);
+
+  let committedDiffStat = "";
+  let committedTrackedDiff = "";
+  if (normalizedBaseRef) {
+    const baseRefCheck = await runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `${normalizedBaseRef}^{commit}`], {
+      allowFailure: true,
+    });
+
+    if (baseRefCheck.code === 0) {
+      const [statResult, diffResult] = await Promise.all([
+        runCommand("git", ["-C", worktreePath, "diff", "--stat", `${normalizedBaseRef}...HEAD`], {
+          allowFailure: true,
+        }),
+        runCommand("git", ["-C", worktreePath, "diff", "--no-ext-diff", "--submodule=diff", `${normalizedBaseRef}...HEAD`], {
+          allowFailure: true,
+        }),
+      ]);
+
+      committedDiffStat = statResult.stdout.trim();
+      committedTrackedDiff = diffResult.stdout.trim();
+    }
+  }
 
   const untrackedFiles: RunReviewUntrackedFile[] = [];
   const untrackedNames = untracked.stdout
@@ -195,8 +218,8 @@ export async function collectWorktreeReview(worktreePath: string): Promise<RunRe
     currentBranch: currentBranch.stdout.trim() || null,
     headSha: headSha.stdout.trim() || null,
     statusShort: statusShort.stdout.trim(),
-    diffStat: diffStat.stdout.trim(),
-    trackedDiff: trackedDiff.stdout.trim(),
+    diffStat: [committedDiffStat, localDiffStat.stdout.trim()].filter(Boolean).join("\n"),
+    trackedDiff: [committedTrackedDiff, localTrackedDiff.stdout.trim()].filter(Boolean).join("\n\n"),
     untrackedFiles,
   };
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 
-import { buildWorktreeBaseName, inspectBranchDeleteCandidate, removeBranch } from "./git";
+import { buildWorktreeBaseName, collectWorktreeReview, inspectBranchDeleteCandidate, removeBranch } from "./git";
 import { runCommand } from "./process";
 
 const tempDirectories: string[] = [];
@@ -77,6 +77,25 @@ test("buildWorktreeBaseName keeps run index unpadded while still 1-based", () =>
   });
 
   expect(name).toBe("repo-main-batch-123-10");
+});
+
+
+test("collectWorktreeReview includes committed and uncommitted tracked changes relative to base ref", async () => {
+  const repoRoot = await createTempRepo();
+
+  await runCommand("git", ["-C", repoRoot, "switch", "-c", "batch/run-4"]);
+  await fs.writeFile(path.join(repoRoot, "committed.txt"), "committed change\n");
+  await runCommand("git", ["-C", repoRoot, "add", "committed.txt"]);
+  await runCommand("git", ["-C", repoRoot, "commit", "-m", "committed change"]);
+
+  await fs.appendFile(path.join(repoRoot, "README.md"), "working tree change\n");
+
+  const review = await collectWorktreeReview(repoRoot, "main");
+
+  expect(review.trackedDiff).toContain("+++ b/committed.txt");
+  expect(review.trackedDiff).toContain("+++ b/README.md");
+  expect(review.diffStat).toContain("committed.txt");
+  expect(review.diffStat).toContain("README.md");
 });
 
 test("inspectBranchDeleteCandidate marks branches with no extra commits as safe", async () => {
