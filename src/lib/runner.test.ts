@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { buildCodexTurnConfig, createRunId, buildReviewPrompt } from "./runner";
-import type { Batch, Run } from "../types";
+import type { Batch } from "../types";
 
 test("createRunId returns a stable run id derived from the run index", () => {
   const id = createRunId(0);
@@ -14,7 +14,7 @@ test("createRunId increments with the run index", () => {
   expect(createRunId(9)).toBe("run-10");
 });
 
-test("buildReviewPrompt includes XML metadata and the candidate prompt", () => {
+test("buildReviewPrompt keeps reviewer prompt focused on the scoring task", () => {
   const batch: Batch = {
     id: "batch-1",
     mode: "ranked",
@@ -52,55 +52,32 @@ test("buildReviewPrompt includes XML metadata and the candidate prompt", () => {
     runs: [],
   };
 
-  const candidateRun: Run = {
-    id: "run-1",
-    index: 0,
-    title: "Run 1",
-    prompt: "Update ranked mode so reviewers can start early.",
-    status: "completed",
-    startedAt: "2026-03-16T00:00:00.000Z",
-    completedAt: "2026-03-16T00:10:00.000Z",
-    threadId: "thread-1",
-    worktreePath: "/repo/worktrees/run-1",
-    workingDirectory: "/repo/worktrees/run-1/project",
-    baseRef: "main",
-    finalResponse: "",
-    error: null,
-    usage: null,
-    logs: [
-      {
-        id: "log-1",
-        at: "2026-03-16T00:05:00.000Z",
-        level: "info",
-        message: "Created branch batch/batch-1/run-1.",
-      },
-    ],
-    turns: [],
-    items: [],
-    review: null,
-    kind: "candidate",
-    score: null,
-    rank: null,
-    reviewedRunId: null,
-  };
+  const prompt = buildReviewPrompt(batch);
 
-  const prompt = buildReviewPrompt(batch, candidateRun);
-
-  expect(prompt).toContain("<review_info>");
-  expect(prompt).toContain("<task_branch>batch/batch-1/run-1</task_branch>");
-  expect(prompt).toContain("<base_branch>main</base_branch>");
+  expect(prompt).toContain("Score the candidate carefully.");
   expect(prompt).toContain("The task is to:");
   expect(prompt).toContain("Implement ranked-mode scheduling updates.");
+  expect(prompt).not.toContain("<review_info>");
+  expect(prompt).not.toContain("<task_branch>");
+  expect(prompt).not.toContain("<base_branch>");
   expect(prompt).not.toContain("The candidate agent's prompt was:");
   expect(prompt).not.toContain("Update ranked mode so reviewers can start early.");
 });
 
 test("buildCodexTurnConfig captures developer prompt and session settings", () => {
+  const developerInstructions = [
+    "Submit exactly one score with `agents-runner-workflow.submit_score`.",
+    "",
+    "<ranked_review_metadata>",
+    "  <reviewed_run_id>run-1</reviewed_run_id>",
+    "</ranked_review_metadata>",
+  ].join("\n");
+
   const config = buildCodexTurnConfig({
     launchMode: "start",
-    developerPrompt: "Follow the managed branch workflow.",
+    developerPrompt: developerInstructions,
     clientConfig: {
-      developer_instructions: "Follow the managed branch workflow.",
+      developer_instructions: developerInstructions,
     },
     sessionConfig: {
       model: "gpt-5-codex",
@@ -115,9 +92,9 @@ test("buildCodexTurnConfig captures developer prompt and session settings", () =
   });
 
   expect(config.launchMode).toBe("start");
-  expect(config.developerPrompt).toBe("Follow the managed branch workflow.");
+  expect(config.developerPrompt).toBe(developerInstructions);
   expect(config.clientConfig).toEqual({
-    developer_instructions: "Follow the managed branch workflow.",
+    developer_instructions: developerInstructions,
   });
   expect(config.sessionConfig).toEqual({
     model: "gpt-5-codex",

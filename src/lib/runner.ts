@@ -582,15 +582,13 @@ function normalizeNumericScore(value: unknown): number | null {
 
 function buildCandidateDeveloperInstructions(branchName: string): string {
   return [
-    "Follow this git workflow exactly:",
-    `- Use branch ${branchName}.`,
-    "- Produce exactly one commit for this run.",
-    "- Use the MCP server \"agents-runner-workflow\" tool \"create_commit\" to create the commit.",
-    "- Do not run git commit directly.",
-    "- For create_commit.working_folder, pass the worktree root from `git rev-parse --show-toplevel`.",
-    "- For create_commit.files, include only files relevant to this task.",
-    "- For create_commit.message, provide a concise commit message.",
-    "- In your final response, include the branch name and commit SHA.",
+    "Work on the branch in the metadata below and produce exactly one commit for this run.",
+    "Use `agents-runner-workflow.create_commit` to create the commit instead of running `git commit` directly.",
+    "Use the worktree root from `git rev-parse --show-toplevel` as `working_folder`, and include only task-relevant files.",
+    "",
+    "<ranked_candidate_metadata>",
+    `  <branch>${escapeXml(branchName)}</branch>`,
+    "</ranked_candidate_metadata>",
   ].join("\n");
 }
 
@@ -601,32 +599,16 @@ function buildReviewRunTitle(candidateRun: Run, reviewIndex: number): string {
 function buildReviewTasks(batch: Batch, candidateRun: Run): Array<GenerationTask & { reviewedRunId: string }> {
   return Array.from({ length: batch.config.reviewCount }, (_, reviewIndex) => ({
     title: buildReviewRunTitle(candidateRun, reviewIndex),
-    prompt: buildReviewPrompt(batch, candidateRun),
+    prompt: buildReviewPrompt(batch),
     reviewedRunId: candidateRun.id,
   }));
 }
 
-export function buildReviewPrompt(batch: Batch, candidateRun: Run): string {
-  const candidateBranch = getRunCreatedBranchName(candidateRun) || "(branch unavailable)";
-  const baseBranch = candidateRun.baseRef || batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "(base unavailable)";
+export function buildReviewPrompt(batch: Batch): string {
   const originalTask = batch.config.prompt.trim() || "(task unavailable)";
 
   return [
     batch.config.reviewPrompt.trim(),
-    "",
-    "---",
-    "",
-    "You can find the work in the repository:",
-    "",
-    "```xml",
-    "<review_info>",
-    `<task_branch>${escapeXml(candidateBranch)}</task_branch>`,
-    `<base_branch>${escapeXml(baseBranch)}</base_branch>`,
-    `<candidate_run_id>${escapeXml(candidateRun.id)}</candidate_run_id>`,
-    "</review_info>",
-    "```",
-    "",
-    "Review the task branch against the base branch in the current repository before you score it.",
     "",
     "The task is to:",
     "````markdown",
@@ -635,14 +617,20 @@ export function buildReviewPrompt(batch: Batch, candidateRun: Run): string {
   ].join("\n");
 }
 
-function buildReviewerDeveloperInstructions(reviewedRunId: string): string {
+function buildReviewerDeveloperInstructions(batch: Batch, candidateRun: Run, reviewedRunId: string): string {
+  const candidateBranch = getRunCreatedBranchName(candidateRun) || "(branch unavailable)";
+  const baseBranch = candidateRun.baseRef || batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "(base unavailable)";
+
   return [
-    "You must submit your score through MCP tool agents-runner-workflow.submit_score exactly once.",
-    `- reviewed_run_id must be ${reviewedRunId}.`,
-    "- working_folder must be the worktree root from `git rev-parse --show-toplevel`.",
-    "- score must be between 0 and 100.",
-    "- reason must be concise and specific.",
-    "After calling submit_score, provide a brief human-readable summary.",
+    "Review the task branch against the base branch from the metadata below before scoring.",
+    "Submit exactly one score with `agents-runner-workflow.submit_score` instead of reporting the score only in plain text.",
+    "Use the worktree root from `git rev-parse --show-toplevel` as `working_folder`. Keep the score between 0 and 100, and keep the reason concise and specific.",
+    "",
+    "<ranked_review_metadata>",
+    `  <reviewed_run_id>${escapeXml(reviewedRunId)}</reviewed_run_id>`,
+    `  <task_branch>${escapeXml(candidateBranch)}</task_branch>`,
+    `  <base_branch>${escapeXml(baseBranch)}</base_branch>`,
+    "</ranked_review_metadata>",
   ].join("\n");
 }
 
@@ -1508,7 +1496,7 @@ async function executeReviewerRun(
   }
 
   const reviewedWorkingDirectory = reviewedRun.workingDirectory || reviewedRun.worktreePath || null;
-  const prompt = buildReviewPrompt(batch, reviewedRun);
+  const prompt = buildReviewPrompt(batch);
 
   store.updateRun(batchId, runId, (run) => {
     run.prompt = prompt;
@@ -1527,7 +1515,7 @@ async function executeReviewerRun(
     sandboxModeOverride: "read-only",
     workingDirectoryOverride: reviewedWorkingDirectory,
     promptOverride: prompt,
-    developerInstructions: buildReviewerDeveloperInstructions(String(reviewRun.reviewedRunId ?? "")),
+    developerInstructions: buildReviewerDeveloperInstructions(batch, reviewedRun, String(reviewRun.reviewedRunId ?? "")),
   });
 }
 

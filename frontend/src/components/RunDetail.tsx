@@ -17,6 +17,11 @@ const LogsTab = lazy(async () => {
   return { default: mod.LogsTab };
 });
 
+const ConfigsTab = lazy(async () => {
+  const mod = await import("./tabs/ConfigsTab.js");
+  return { default: mod.ConfigsTab };
+});
+
 interface Props {
   run: Run | null;
 }
@@ -39,6 +44,7 @@ function formatUsageSummary(run: Run): string {
 }
 
 export function RunDetail({ run }: Props) {
+  const [configsOpen, setConfigsOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const selectedBatchId = useAppStore((state) => state.selectedBatchId);
   const selectedBatch = useAppStore(selectSelectedBatch);
@@ -74,6 +80,7 @@ export function RunDetail({ run }: Props) {
 
   const directory = run.workingDirectory || run.worktreePath || "Pending";
   const usageSummary = formatUsageSummary(run);
+  const configCount = run.turns.filter((turn) => Boolean(turn.codexConfig)).length;
   const panels: { key: RunDetailTab; label: string }[] = [
     { key: "session", label: "Session" },
     ...(showReviewPanel ? [{ key: "review", label: "Review" } as const] : []),
@@ -114,7 +121,21 @@ export function RunDetail({ run }: Props) {
           <button
             className="btn btn-ghost btn-sm"
             type="button"
-            onClick={() => setLogsOpen(true)}
+            disabled={configCount === 0}
+            onClick={() => {
+              setLogsOpen(false);
+              setConfigsOpen(true);
+            }}
+          >
+            Configs ({configCount})
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            type="button"
+            onClick={() => {
+              setConfigsOpen(false);
+              setLogsOpen(true);
+            }}
           >
             Logs ({run.logs.length})
           </button>
@@ -147,6 +168,30 @@ export function RunDetail({ run }: Props) {
           </Suspense>
         )}
       </div>
+
+      {configsOpen && (
+        <div
+          className="run-logs-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Run configs"
+          onClick={() => setConfigsOpen(false)}
+        >
+          <div className="run-logs-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="run-logs-panel-header">
+              <div className="run-logs-panel-title">Turn Configs</div>
+              <button className="btn btn-ghost btn-sm" type="button" onClick={() => setConfigsOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="run-logs-panel-body">
+              <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading configs...</div>}>
+                <ConfigsTab key={run.id} run={run} />
+              </Suspense>
+            </div>
+          </div>
+        </div>
+      )}
 
       {logsOpen && (
         <div
