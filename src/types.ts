@@ -86,6 +86,7 @@ export interface RunReviewUntrackedFile {
 export interface RunReview {
   currentBranch: string | null;
   headSha: string | null;
+  comparisonBaseRef: string | null;
   statusShort: string;
   diffStat: string;
   trackedDiff: string;

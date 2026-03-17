@@ -7,7 +7,7 @@ import { loadRecentProjectPaths, rememberRecentProjectPath } from "../utils/rece
 import { ModelPicker } from "./ModelPicker.js";
 import { FolderBrowser, openBrowser } from "./FolderBrowser.js";
 import { PlayIcon } from "../icons.js";
-import type { CodexModel, ProjectContext } from "../types.js";
+import type { AppConfig, BatchMode, CodexModel, NewBatchDraft, ProjectContext } from "../types.js";
 
 function getDefaultCatalogModel(models: CodexModel[]) {
   return models.find((m) => m.isDefault) ?? null;
@@ -26,14 +26,81 @@ function resolveDefaultBaseRef(project: ProjectContext | null | undefined): stri
 }
 
 function closeDrawer() {
-  useAppStore.setState({ drawerOpen: false, modelMenuOpen: false });
+  useAppStore.setState({ drawerOpen: false, modelMenuOpen: false, newBatchDraft: null });
   document.body.style.overflow = "";
 }
 
 const DEFAULT_REVIEW_PROMPT = "Review the implementation on the task branch against the base branch. Score it from 0 to 100, prioritizing correctness, task completion, code quality, and regression risk. Penalize incomplete work, broken behavior, and unnecessary changes.";
 
+interface InitialDrawerState {
+  mode: BatchMode;
+  projectPath: string;
+  worktreeRoot: string;
+  runCount: string;
+  concurrency: string;
+  prompt: string;
+  taskPrompt: string;
+  reviewPrompt: string;
+  reviewCount: string;
+  baseRef: string;
+  model: string;
+  reasoningEffort: string;
+  sandboxMode: string;
+  networkAccess: boolean;
+  webSearch: boolean;
+}
+
+function buildDefaultNewBatchDraft(config: AppConfig | null): NewBatchDraft {
+  const defaultRunCount = Math.max(1, config?.defaults?.runCount ?? 10);
+  return {
+    mode: "repeated",
+    config: {
+      runCount: defaultRunCount,
+      concurrency: defaultRunCount,
+      reviewCount: 3,
+      projectPath: "",
+      worktreeRoot: "",
+      prompt: "",
+      taskPrompt: "",
+      reviewPrompt: DEFAULT_REVIEW_PROMPT,
+      baseRef: "",
+      model: "",
+      sandboxMode: config?.defaults?.sandboxMode ?? "workspace-write",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+      reasoningEffort: "",
+    },
+  };
+}
+
+function buildInitialDrawerState(config: AppConfig | null, draft: NewBatchDraft | null): InitialDrawerState {
+  const source = draft ?? buildDefaultNewBatchDraft(config);
+  const runCount = Math.max(1, source.config.runCount || 1);
+  const reviewCount = Math.max(1, source.config.reviewCount || 1);
+  const concurrencyLimit = source.mode === "ranked" ? runCount * reviewCount : runCount;
+  const concurrency = Math.max(1, Math.min(source.config.concurrency || runCount, concurrencyLimit));
+
+  return {
+    mode: source.mode,
+    projectPath: source.config.projectPath,
+    worktreeRoot: source.config.worktreeRoot,
+    runCount: String(runCount),
+    concurrency: String(concurrency),
+    prompt: source.config.prompt,
+    taskPrompt: source.config.taskPrompt,
+    reviewPrompt: source.config.reviewPrompt || DEFAULT_REVIEW_PROMPT,
+    reviewCount: String(reviewCount),
+    baseRef: source.config.baseRef,
+    model: source.config.model,
+    reasoningEffort: source.config.reasoningEffort,
+    sandboxMode: source.config.sandboxMode || config?.defaults?.sandboxMode || "workspace-write",
+    networkAccess: source.config.networkAccessEnabled,
+    webSearch: source.config.webSearchMode === "live",
+  };
+}
+
 function getMaxConcurrency(
-  mode: "repeated" | "generated" | "ranked",
+  mode: BatchMode,
   runCountValue: string,
   reviewCountValue: string,
 ): number {
@@ -48,7 +115,7 @@ export function NewBatchDrawer() {
   const inspect = useAppStore((s) => s.projectInspect);
   const modelCatalog = useAppStore((s) => s.modelCatalog);
 
-  const [mode, setMode] = useState<"repeated" | "generated" | "ranked">("repeated");
+  const [mode, setMode] = useState<BatchMode>("repeated");
   const [projectPath, setProjectPath] = useState("");
   const [recentProjectPaths, setRecentProjectPaths] = useState<string[]>([]);
   const [worktreeRoot, setWorktreeRoot] = useState("");
@@ -68,34 +135,55 @@ export function NewBatchDrawer() {
   const [submitting, setSubmitting] = useState(false);
   const [autoWorktreeRoot, setAutoWorktreeRoot] = useState<string | null>(null);
   const [inspectDebounce, setInspectDebounce] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [initialInspectRequest, setInitialInspectRequest] = useState<{ path: string; preferredBaseRef: string } | null>(null);
   const [browserTitle, setBrowserTitle] = useState("Choose Folder");
   const [browserTarget, setBrowserTarget] = useState<"project" | "worktree">("project");
 
   // Reset when drawer opens
   useEffect(() => {
     if (!isOpen) return;
-    const c = useAppStore.getState().config;
-    setMode("repeated");
-    setProjectPath("");
+    if (inspectDebounce) {
+      clearTimeout(inspectDebounce);
+      setInspectDebounce(null);
+    }
+
+    const store = useAppStore.getState();
+    const c = store.config;
+    const draft = store.newBatchDraft;
+    const initialState = buildInitialDrawerState(c, draft);
+    setMode(initialState.mode);
+    setProjectPath(initialState.projectPath);
     setRecentProjectPaths(loadRecentProjectPaths());
-    setWorktreeRoot("");
-    setRunCount(String(c?.defaults?.runCount ?? 10));
-    setConcurrency(String(c?.defaults?.runCount ?? 10));
-    setPrompt("");
-    setTaskPrompt("");
-    setReviewPrompt(DEFAULT_REVIEW_PROMPT);
-    setReviewCount("3");
-    setBaseRef("");
-    setModel("");
-    setReasoningEffort("");
-    setSandboxMode(c?.defaults?.sandboxMode ?? "workspace-write");
-    setNetworkAccess(false);
-    setWebSearch(false);
+    setWorktreeRoot(initialState.worktreeRoot);
+    setRunCount(initialState.runCount);
+    setConcurrency(initialState.concurrency);
+    setPrompt(initialState.prompt);
+    setTaskPrompt(initialState.taskPrompt);
+    setReviewPrompt(initialState.reviewPrompt);
+    setReviewCount(initialState.reviewCount);
+    setBaseRef(initialState.baseRef);
+    setModel(initialState.model);
+    setReasoningEffort(initialState.reasoningEffort);
+    setSandboxMode(initialState.sandboxMode);
+    setNetworkAccess(initialState.networkAccess);
+    setWebSearch(initialState.webSearch);
     setInspectStatus("");
     setSubmitting(false);
     setAutoWorktreeRoot(null);
+    setInitialInspectRequest(
+      initialState.projectPath.trim()
+        ? { path: initialState.projectPath, preferredBaseRef: initialState.baseRef.trim() }
+        : null,
+    );
     useAppStore.setState({ projectInspect: null });
+    store.clearNewBatchDraft();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !initialInspectRequest) return;
+    void doInspect(initialInspectRequest.path, initialInspectRequest.preferredBaseRef);
+    setInitialInspectRequest(null);
+  }, [isOpen, initialInspectRequest]);
 
   // Close on Escape
   useEffect(() => {
@@ -120,7 +208,7 @@ export function NewBatchDrawer() {
 
   function syncMaxConcurrency(
     nextRunCount: string,
-    nextMode: "repeated" | "generated" | "ranked" = mode,
+    nextMode: BatchMode = mode,
     nextReviewCount: string = reviewCount,
   ) {
     const max = getMaxConcurrency(nextMode, nextRunCount, nextReviewCount);
@@ -143,7 +231,7 @@ export function NewBatchDrawer() {
     syncMaxConcurrency(runCount, nextMode);
   }
 
-  async function doInspect(path: string) {
+  async function doInspect(path: string, preferredBaseRef = "") {
     if (!path) {
       useAppStore.setState({ projectInspect: null });
       setBaseRef("");
@@ -156,12 +244,12 @@ export function NewBatchDrawer() {
       const context = payload.projectContext;
       useAppStore.setState({ projectInspect: context });
       rememberProjectPath(context.projectPath);
-      setBaseRef(resolveDefaultBaseRef(context));
+      setBaseRef(preferredBaseRef || resolveDefaultBaseRef(context));
       updateWorktreeRoot(deriveParentPath(context.projectPath));
       setInspectStatus("Git project ready.");
     } catch (err) {
       useAppStore.setState({ projectInspect: null });
-      setBaseRef("");
+      setBaseRef(preferredBaseRef);
       setInspectStatus((err as Error).message);
     }
   }
@@ -177,6 +265,7 @@ export function NewBatchDrawer() {
 
   function handleProjectPathChange(value: string) {
     setProjectPath(value);
+    setInitialInspectRequest(null);
     useAppStore.setState({ projectInspect: null });
     setBaseRef("");
     setInspectStatus("");

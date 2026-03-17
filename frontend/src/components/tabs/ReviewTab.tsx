@@ -74,6 +74,10 @@ export function ReviewTab({ run }: Props) {
 
   const review = run.review;
   const files = useMemo(() => splitDiff(review?.trackedDiff), [review?.trackedDiff]);
+  const trackedDiffTitle = review?.comparisonBaseRef ? "Changes Since Checkout" : "Tracked Diff";
+  const trackedDiffHint = review?.comparisonBaseRef
+    ? `Compared against the merge base with ${review.comparisonBaseRef}.`
+    : "";
   const totals = useMemo(() => {
     return files.reduce((acc, file) => ({
       additions: acc.additions + file.additions,
@@ -356,7 +360,10 @@ export function ReviewTab({ run }: Props) {
       ) : (
         <>
           <div className="review-section">
-            <div className="review-section-title">Tracked Diff</div>
+            <div className="review-section-title">{trackedDiffTitle}</div>
+            {trackedDiffHint && (
+              <div className="review-action-hint review-action-hint-compact">{trackedDiffHint}</div>
+            )}
             {!files.length ? (
               <pre className="code-block">{review.trackedDiff || "No tracked diff."}</pre>
             ) : (

@@ -1302,6 +1302,7 @@ export async function createRunBranch(
     run.review = review ?? {
       currentBranch: nextBranchName,
       headSha: run.review?.headSha ?? null,
+      comparisonBaseRef: run.review?.comparisonBaseRef ?? null,
       statusShort: run.review?.statusShort ?? "",
       diffStat: run.review?.diffStat ?? "",
       trackedDiff: run.review?.trackedDiff ?? "",

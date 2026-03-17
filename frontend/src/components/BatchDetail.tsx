@@ -3,10 +3,10 @@ import { apiCancelBatch } from "../state/api.js";
 import { StatusPill } from "./StatusPill.js";
 import { RunCard } from "./RunCard.js";
 import { RunDetail } from "./RunDetail.js";
-import { ClockIcon, FolderIcon, GitIcon, XIcon, PlayIcon } from "../icons.js";
+import { ClockIcon, FolderIcon, GitIcon, XIcon, PlayIcon, RefreshIcon } from "../icons.js";
 import { formatDate, formatRelative, formatModeLabel } from "../utils/format.js";
 import { summarizeRunCounts } from "../utils/runStatus.js";
-import type { Run } from "../types.js";
+import type { Batch, NewBatchDraft, Run } from "../types.js";
 
 interface ReviewerGlance {
   run: Run;
@@ -118,6 +118,13 @@ function buildRunsSummaryLabel(batch: { mode: string; runs: Run[]; config: { run
   return `${candidateCount} candidates · ${reviewerCount} reviews`;
 }
 
+function buildNewBatchDraft(batch: Batch): NewBatchDraft {
+  return {
+    mode: batch.mode,
+    config: { ...batch.config },
+  };
+}
+
 export function BatchDetail() {
   const batch = useAppStore(selectSelectedBatch);
   const selectedRunId = useAppStore((s) => s.selectedRunId);
@@ -193,6 +200,11 @@ export function BatchDetail() {
     }
   }
 
+  function handleUseAsTemplate() {
+    useAppStore.getState().openNewBatchDrawer(buildNewBatchDraft(batch));
+    document.body.style.overflow = "hidden";
+  }
+
   return (
     <div className="batch-detail">
       <div className="batch-detail-header">
@@ -213,6 +225,9 @@ export function BatchDetail() {
           </div>
         </div>
         <div className="batch-detail-actions">
+          <button className="btn btn-ghost btn-sm" type="button" onClick={handleUseAsTemplate}>
+            <RefreshIcon /> Use as Template
+          </button>
           <StatusPill status={batch.status} />
           {canCancel && (
             <button className="btn btn-danger btn-sm" type="button" onClick={handleCancel}>

@@ -15,7 +15,7 @@ export function Navbar() {
   const runtimeBadgeLabel = getRuntimeBadgeLabel(auth);
 
   function handleNewBatch() {
-    useAppStore.setState({ drawerOpen: true });
+    useAppStore.getState().openNewBatchDrawer();
     document.body.style.overflow = "hidden";
   }
 

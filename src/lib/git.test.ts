@@ -92,10 +92,30 @@ test("collectWorktreeReview includes committed and uncommitted tracked changes r
 
   const review = await collectWorktreeReview(repoRoot, "main");
 
+  expect(review.comparisonBaseRef).toBe("main");
   expect(review.trackedDiff).toContain("+++ b/committed.txt");
   expect(review.trackedDiff).toContain("+++ b/README.md");
   expect(review.diffStat).toContain("committed.txt");
   expect(review.diffStat).toContain("README.md");
+});
+
+test("collectWorktreeReview merges committed and uncommitted edits into one diff against the merge base", async () => {
+  const repoRoot = await createTempRepo();
+
+  await runCommand("git", ["-C", repoRoot, "switch", "-c", "batch/run-5"]);
+  await fs.appendFile(path.join(repoRoot, "README.md"), "committed line\n");
+  await runCommand("git", ["-C", repoRoot, "add", "README.md"]);
+  await runCommand("git", ["-C", repoRoot, "commit", "-m", "update readme"]);
+
+  await fs.appendFile(path.join(repoRoot, "README.md"), "working tree line\n");
+
+  const review = await collectWorktreeReview(repoRoot, "main");
+  const readmeDiffHeaderCount = (review.trackedDiff.match(/^diff --git a\/README\.md b\/README\.md$/gm) ?? []).length;
+
+  expect(review.comparisonBaseRef).toBe("main");
+  expect(readmeDiffHeaderCount).toBe(1);
+  expect(review.trackedDiff).toContain("+committed line");
+  expect(review.trackedDiff).toContain("+working tree line");
 });
 
 test("inspectBranchDeleteCandidate marks branches with no extra commits as safe", async () => {

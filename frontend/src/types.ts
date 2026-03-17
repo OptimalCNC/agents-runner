@@ -64,6 +64,7 @@ export interface RunReviewUntrackedFile {
 export interface RunReview {
   currentBranch: string | null;
   headSha: string | null;
+  comparisonBaseRef: string | null;
   statusShort: string;
   diffStat: string;
   trackedDiff: string;
@@ -249,6 +250,11 @@ export interface BatchSummary {
   queuedRuns: number;
   config: BatchConfig;
   generation: GenerationState | null;
+}
+
+export interface NewBatchDraft {
+  mode: BatchMode;
+  config: BatchConfig;
 }
 
 export interface DirectoryEntry {

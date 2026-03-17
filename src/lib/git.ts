@@ -154,40 +154,40 @@ export async function createWorktree({
 
 export async function collectWorktreeReview(worktreePath: string, baseRef?: string | null): Promise<RunReview> {
   const normalizedBaseRef = String(baseRef ?? "").trim();
-  const [currentBranch, headSha, statusShort, localDiffStat, localTrackedDiff, untracked] = await Promise.all([
+  const [currentBranch, headSha, statusShort, untracked] = await Promise.all([
     runCommand("git", ["-C", worktreePath, "branch", "--show-current"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "rev-parse", "--short=12", "HEAD"], { allowFailure: true }),
     runCommand("git", ["-C", worktreePath, "status", "--short"], { allowFailure: true }),
-    runCommand("git", ["-C", worktreePath, "diff", "--stat"], { allowFailure: true }),
-    runCommand("git", ["-C", worktreePath, "diff", "--no-ext-diff", "--submodule=diff"], {
-      allowFailure: true,
-    }),
     runCommand("git", ["-C", worktreePath, "ls-files", "--others", "--exclude-standard"], {
       allowFailure: true,
     }),
   ]);
 
-  let committedDiffStat = "";
-  let committedTrackedDiff = "";
+  let comparisonBaseRef: string | null = null;
+  let diffRef = "HEAD";
   if (normalizedBaseRef) {
     const baseRefCheck = await runCommand("git", ["-C", worktreePath, "rev-parse", "--verify", "--quiet", `${normalizedBaseRef}^{commit}`], {
       allowFailure: true,
     });
 
     if (baseRefCheck.code === 0) {
-      const [statResult, diffResult] = await Promise.all([
-        runCommand("git", ["-C", worktreePath, "diff", "--stat", `${normalizedBaseRef}...HEAD`], {
-          allowFailure: true,
-        }),
-        runCommand("git", ["-C", worktreePath, "diff", "--no-ext-diff", "--submodule=diff", `${normalizedBaseRef}...HEAD`], {
-          allowFailure: true,
-        }),
-      ]);
-
-      committedDiffStat = statResult.stdout.trim();
-      committedTrackedDiff = diffResult.stdout.trim();
+      const mergeBaseResult = await runCommand("git", ["-C", worktreePath, "merge-base", normalizedBaseRef, "HEAD"], {
+        allowFailure: true,
+      });
+      const mergeBaseSha = mergeBaseResult.stdout.trim();
+      if (mergeBaseSha) {
+        comparisonBaseRef = normalizedBaseRef;
+        diffRef = mergeBaseSha;
+      }
     }
   }
+
+  const [diffStatResult, trackedDiffResult] = await Promise.all([
+    runCommand("git", ["-C", worktreePath, "diff", "--stat", diffRef, "--"], { allowFailure: true }),
+    runCommand("git", ["-C", worktreePath, "diff", "--no-ext-diff", "--submodule=diff", diffRef, "--"], {
+      allowFailure: true,
+    }),
+  ]);
 
   const untrackedFiles: RunReviewUntrackedFile[] = [];
   const untrackedNames = untracked.stdout
@@ -217,9 +217,10 @@ export async function collectWorktreeReview(worktreePath: string, baseRef?: stri
   return {
     currentBranch: currentBranch.stdout.trim() || null,
     headSha: headSha.stdout.trim() || null,
+    comparisonBaseRef,
     statusShort: statusShort.stdout.trim(),
-    diffStat: [committedDiffStat, localDiffStat.stdout.trim()].filter(Boolean).join("\n"),
-    trackedDiff: [committedTrackedDiff, localTrackedDiff.stdout.trim()].filter(Boolean).join("\n\n"),
+    diffStat: diffStatResult.stdout.trim(),
+    trackedDiff: trackedDiffResult.stdout.trim(),
     untrackedFiles,
   };
 }

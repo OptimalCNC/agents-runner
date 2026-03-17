@@ -1,6 +1,14 @@
 import { create } from "zustand";
 
-import type { AppConfig, BatchSummary, Batch, BatchDeletePreview, ProjectContext, CodexModel } from "../types.js";
+import type {
+  AppConfig,
+  BatchSummary,
+  Batch,
+  BatchDeletePreview,
+  ProjectContext,
+  CodexModel,
+  NewBatchDraft,
+} from "../types.js";
 import { normalizeMode } from "../utils/format.js";
 import { buildProjectPathOptions, getProjectPath } from "../utils/paths.js";
 import {
@@ -60,6 +68,7 @@ interface AppState {
   selectedRunId: string | null;
   activeTab: RunDetailTab;
   drawerOpen: boolean;
+  newBatchDraft: NewBatchDraft | null;
   modelMenuOpen: boolean;
   projectFilters: string[];
   projectInspect: ProjectContext | null;
@@ -82,6 +91,8 @@ interface AppState {
   selectBatch: (batchId: string | null) => void;
   selectRun: (runId: string | null) => void;
   selectTab: (tab: RunDetailTab) => void;
+  openNewBatchDrawer: (draft?: NewBatchDraft | null) => void;
+  clearNewBatchDraft: () => void;
   setProjectFilters: (filters: string[]) => void;
   reconcileSelection: (options?: { preferSelectedBatchVisible?: boolean }) => void;
 }
@@ -173,6 +184,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedRunId: null,
   activeTab: "session",
   drawerOpen: false,
+  newBatchDraft: null,
   modelMenuOpen: false,
   projectFilters: [],
   projectInspect: null,
@@ -360,6 +372,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeTab: tab,
     });
     syncPersistedUiState(get());
+  },
+
+  openNewBatchDrawer: (draft) => {
+    set({
+      drawerOpen: true,
+      modelMenuOpen: false,
+      newBatchDraft: draft ?? null,
+    });
+  },
+
+  clearNewBatchDraft: () => {
+    if (get().newBatchDraft === null) {
+      return;
+    }
+
+    set({ newBatchDraft: null });
   },
 
   setProjectFilters: (filters) => {
