@@ -37,23 +37,24 @@ export function BatchDetail() {
     );
   }
 
-  const selectedRun = batch.runs.find((r) => r.id === selectedRunId) ?? null;
-  const canCancel = batch.status === "running" || batch.status === "queued";
-  const baseRef = batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "Current HEAD";
+  const selectedBatch = batch;
+  const selectedRun = selectedBatch.runs.find((r) => r.id === selectedRunId) ?? null;
+  const canCancel = selectedBatch.status === "running" || selectedBatch.status === "queued";
+  const baseRef = selectedBatch.config.baseRef || selectedBatch.projectContext?.branchName || selectedBatch.projectContext?.headSha || "Current HEAD";
 
-  const completedRuns = batch.runs.filter((r) => r.status === "completed").length;
-  const failedRuns = batch.runs.filter((r) => r.status === "failed").length;
-  const cancelledRuns = batch.runs.filter((r) => r.status === "cancelled").length;
-  const preparingRuns = batch.runs.filter((r) => r.status === "preparing").length;
-  const waitingForCodexRuns = batch.runs.filter((r) => r.status === "waiting_for_codex").length;
-  const runningRuns = batch.runs.filter((r) => r.status === "running").length;
-  const queuedRuns = batch.runs.filter((r) => r.status === "queued").length;
+  const completedRuns = selectedBatch.runs.filter((r) => r.status === "completed").length;
+  const failedRuns = selectedBatch.runs.filter((r) => r.status === "failed").length;
+  const cancelledRuns = selectedBatch.runs.filter((r) => r.status === "cancelled").length;
+  const preparingRuns = selectedBatch.runs.filter((r) => r.status === "preparing").length;
+  const waitingForCodexRuns = selectedBatch.runs.filter((r) => r.status === "waiting_for_codex").length;
+  const runningRuns = selectedBatch.runs.filter((r) => r.status === "running").length;
+  const queuedRuns = selectedBatch.runs.filter((r) => r.status === "queued").length;
 
-  const workflow = getWorkflowUI(batch.mode);
+  const workflow = getWorkflowUI(selectedBatch.mode);
 
   async function handleCancel() {
     try {
-      await apiCancelBatch(batch!.id);
+      await apiCancelBatch(selectedBatch.id);
       useAppStore.getState().addToast("info", "Cancel requested", "The batch will stop after current runs finish.");
     } catch (err) {
       useAppStore.getState().addToast("error", "Cancel failed", (err as Error).message);
@@ -61,7 +62,7 @@ export function BatchDetail() {
   }
 
   function handleUseAsTemplate() {
-    useAppStore.getState().openNewBatchDrawer(buildNewBatchDraft(batch));
+    useAppStore.getState().openNewBatchDrawer(buildNewBatchDraft(selectedBatch));
     document.body.style.overflow = "hidden";
   }
 
@@ -71,13 +72,13 @@ export function BatchDetail() {
         <div className="batch-detail-title-area">
           <h2>{batch.title}</h2>
           <div className="batch-detail-meta">
-            <span className="meta-item"><ClockIcon /> Created {formatRelative(batch.createdAt)}</span>
+            <span className="meta-item"><ClockIcon /> Created {formatRelative(selectedBatch.createdAt)}</span>
             <span
               className="meta-item meta-item-project-base"
-              title={`${batch.config.projectPath} · Base ref ${baseRef}`}
+              title={`${selectedBatch.config.projectPath} · Base ref ${baseRef}`}
             >
               <FolderIcon />
-              <span className="batch-detail-path">{batch.config.projectPath}</span>
+              <span className="batch-detail-path">{selectedBatch.config.projectPath}</span>
               <span className="meta-item-separator">·</span>
               <GitIcon />
               <span className="mono">{baseRef}</span>
@@ -88,7 +89,7 @@ export function BatchDetail() {
           <button className="btn btn-ghost btn-sm" type="button" onClick={handleUseAsTemplate}>
             <RefreshIcon /> Use as Template
           </button>
-          <StatusPill status={batch.status} />
+          <StatusPill status={selectedBatch.status} />
           {canCancel && (
             <button className="btn btn-danger btn-sm" type="button" onClick={handleCancel}>
               <XIcon /> Cancel
@@ -100,37 +101,37 @@ export function BatchDetail() {
       <div className="batch-detail-summary">
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Mode</span>
-          <span className="meta-item-value">{formatModeLabel(batch.mode)}</span>
+          <span className="meta-item-value">{formatModeLabel(selectedBatch.mode)}</span>
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Runs</span>
-          <span className="meta-item-value">{workflow.buildRunsSummaryLabel(batch)}</span>
+          <span className="meta-item-value">{workflow.buildRunsSummaryLabel(selectedBatch)}</span>
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Concurrency</span>
-          <span className="meta-item-value">{batch.config.concurrency}</span>
+          <span className="meta-item-value">{selectedBatch.config.concurrency}</span>
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Started</span>
-          <span className="meta-item-value">{formatDate(batch.startedAt)}</span>
+          <span className="meta-item-value">{formatDate(selectedBatch.startedAt)}</span>
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Completed</span>
-          <span className="meta-item-value">{formatDate(batch.completedAt)}</span>
+          <span className="meta-item-value">{formatDate(selectedBatch.completedAt)}</span>
         </span>
         <span className="meta-item meta-item-summary">
           <span className="meta-item-prefix">Sandbox</span>
-          <span className="meta-item-value">{batch.config.sandboxMode}</span>
+          <span className="meta-item-value">{selectedBatch.config.sandboxMode}</span>
         </span>
       </div>
 
-      {batch.error && (
+      {selectedBatch.error && (
         <div style={{ padding: "10px 14px", background: "var(--danger-soft)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "var(--radius-sm)", color: "var(--danger)", fontSize: "13px", marginBottom: "24px" }}>
-          {batch.error}
+          {selectedBatch.error}
         </div>
       )}
 
-      {workflow.TasksSection && <workflow.TasksSection batch={batch} />}
+      {workflow.TasksSection && <workflow.TasksSection batch={selectedBatch} />}
 
       <div className="runs-section">
         <div className="section-header">
@@ -147,7 +148,7 @@ export function BatchDetail() {
             })}
           </span>
         </div>
-        {batch.runs.length === 0 ? (
+        {selectedBatch.runs.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -159,7 +160,7 @@ export function BatchDetail() {
             <p className="empty-desc">Work items appear once the batch creates them.</p>
           </div>
         ) : (
-          <workflow.RunsGrid batch={batch} selectedRunId={selectedRunId} />
+          <workflow.RunsGrid batch={selectedBatch} selectedRunId={selectedRunId} />
         )}
       </div>
 
