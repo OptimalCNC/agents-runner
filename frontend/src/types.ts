@@ -371,8 +371,10 @@ export interface BatchDeletePreview {
 export interface AppConfig {
   homeDirectory: string;
   defaults: {
+    port: number;
     runCount: number;
     sandboxMode: string;
+    worktreeRoot: string;
   };
   codexEnvironment: {
     hasOpenAIApiKey: boolean;

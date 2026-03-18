@@ -8,7 +8,10 @@ import { handleMcpRequest } from "./server/mcp";
 const context = createServerContext();
 
 async function main(): Promise<void> {
-  await context.store.load();
+  await Promise.all([
+    context.store.load(),
+    context.settings.load(),
+  ]);
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);

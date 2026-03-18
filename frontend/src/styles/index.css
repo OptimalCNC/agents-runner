@@ -676,6 +676,10 @@ button { cursor: pointer; }
   box-shadow: var(--shadow-sm);
 }
 
+.settings-card + .settings-card {
+  margin-top: 24px;
+}
+
 .settings-card-header {
   display: flex;
   align-items: flex-start;

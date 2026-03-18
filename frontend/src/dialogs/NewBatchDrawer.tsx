@@ -27,7 +27,12 @@ function resolveDefaultBaseRef(project: ProjectContext | null | undefined): stri
 }
 
 function closeDrawer() {
-  useAppStore.setState({ drawerOpen: false, modelMenuOpen: false, newBatchDraft: null });
+  useAppStore.setState({
+    drawerOpen: false,
+    modelMenuOpen: false,
+    newBatchDraft: null,
+    browserDialogOpen: false,
+  });
   document.body.style.overflow = "";
 }
 
@@ -60,7 +65,7 @@ function buildDefaultNewBatchDraft(config: AppConfig | null): NewBatchDraft {
       concurrency: defaultRunCount,
       reviewCount: 3,
       projectPath: "",
-      worktreeRoot: "",
+      worktreeRoot: config?.defaults?.worktreeRoot ?? "",
       prompt: "",
       taskPrompt: "",
       reviewPrompt: DEFAULT_REVIEW_PROMPT,
@@ -655,7 +660,7 @@ export function NewBatchDrawer() {
                 const c = useAppStore.getState().config;
                 setMode("repeated");
                 setProjectPath("");
-                setWorktreeRoot("");
+                setWorktreeRoot(c?.defaults?.worktreeRoot ?? "");
                 setRunCount(String(c?.defaults?.runCount ?? 10));
                 setConcurrency(String(c?.defaults?.runCount ?? 10));
                 setPrompt("");
@@ -687,7 +692,7 @@ export function NewBatchDrawer() {
         </form>
       </aside>
 
-      <FolderBrowser title={browserTitle} onSelect={handleBrowserSelect} />
+      {isOpen ? <FolderBrowser title={browserTitle} onSelect={handleBrowserSelect} /> : null}
     </>
   );
 }

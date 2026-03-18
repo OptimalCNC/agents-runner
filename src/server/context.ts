@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createAppSettingsStore, type AppSettingsStore } from "../lib/appSettings";
 import { createBatchStore } from "../lib/batchStore";
 import { createCodexModelCatalog } from "../lib/codexModels";
 
@@ -15,6 +16,7 @@ export interface ServerContext {
   publicDirectory: string;
   port: number;
   store: BatchStore;
+  settings: AppSettingsStore;
   modelCatalog: ModelCatalog;
 }
 
@@ -28,7 +30,7 @@ export function createServerContext(): ServerContext {
     publicDirectory,
     port: Number(process.env.PORT || DEFAULT_PORT),
     store: createBatchStore(dataDirectory),
+    settings: createAppSettingsStore(dataDirectory),
     modelCatalog: createCodexModelCatalog(),
   };
 }
-

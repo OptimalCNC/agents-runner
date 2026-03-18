@@ -41,6 +41,13 @@ export async function apiLoadConfig(): Promise<AppConfig> {
   return fetchJson<AppConfig>("/api/config");
 }
 
+export async function apiUpdateConfig(payload: { worktreeRoot: string }): Promise<AppConfig> {
+  return fetchJson<AppConfig>("/api/config", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function apiLoadBatches(): Promise<{ batches: BatchSummary[] }> {
   return fetchJson<{ batches: BatchSummary[] }>("/api/batches");
 }
