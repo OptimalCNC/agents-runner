@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
-import { buildCodexTurnConfig, createRunId, buildReviewPrompt } from "./runner";
+import { buildCodexTurnConfig, createRunId } from "./runner";
+import { buildReviewPrompt } from "./workflows/ranked";
 import type { Batch } from "../types";
 
 test("createRunId returns a stable run id derived from the run index", () => {

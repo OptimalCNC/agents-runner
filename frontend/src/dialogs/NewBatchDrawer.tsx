@@ -8,6 +8,7 @@ import { ModelPicker } from "./ModelPicker.js";
 import { FolderBrowser, openBrowser } from "./FolderBrowser.js";
 import { PlayIcon } from "../icons.js";
 import type { AppConfig, BatchMode, CodexModel, NewBatchDraft, ProjectContext } from "../types.js";
+import { getWorkflowUI, getAllWorkflowUIs } from "../workflows/registry.js";
 
 function getDefaultCatalogModel(models: CodexModel[]) {
   return models.find((m) => m.isDefault) ?? null;
@@ -77,7 +78,7 @@ function buildInitialDrawerState(config: AppConfig | null, draft: NewBatchDraft 
   const source = draft ?? buildDefaultNewBatchDraft(config);
   const runCount = Math.max(1, source.config.runCount || 1);
   const reviewCount = Math.max(1, source.config.reviewCount || 1);
-  const concurrencyLimit = source.mode === "ranked" ? runCount * reviewCount : runCount;
+  const concurrencyLimit = getWorkflowUI(source.mode).getMaxConcurrency(runCount, reviewCount);
   const concurrency = Math.max(1, Math.min(source.config.concurrency || runCount, concurrencyLimit));
 
   return {
@@ -99,15 +100,6 @@ function buildInitialDrawerState(config: AppConfig | null, draft: NewBatchDraft 
   };
 }
 
-function getMaxConcurrency(
-  mode: BatchMode,
-  runCountValue: string,
-  reviewCountValue: string,
-): number {
-  const normalizedRunCount = Math.max(1, Number.parseInt(runCountValue || "1", 10) || 1);
-  const normalizedReviewCount = Math.max(1, Number.parseInt(reviewCountValue || "1", 10) || 1);
-  return mode === "ranked" ? normalizedRunCount * normalizedReviewCount : normalizedRunCount;
-}
 
 export function NewBatchDrawer() {
   const isOpen = useAppStore((s) => s.drawerOpen);
@@ -211,12 +203,21 @@ export function NewBatchDrawer() {
     nextMode: BatchMode = mode,
     nextReviewCount: string = reviewCount,
   ) {
-    const max = getMaxConcurrency(nextMode, nextRunCount, nextReviewCount);
+    const runCountInt = Math.max(1, Number.parseInt(nextRunCount || "1", 10) || 1);
+    const reviewCountInt = Math.max(1, Number.parseInt(nextReviewCount || "1", 10) || 1);
+    const max = getWorkflowUI(nextMode).getMaxConcurrency(runCountInt, reviewCountInt);
     if (Number(concurrency) > max) setConcurrency(String(max));
   }
 
+  function handleReviewCountChange(value: string) {
+    setReviewCount(value);
+    syncMaxConcurrency(runCount, mode, value);
+  }
+
   function clampConcurrencyInput(value: string) {
-    const max = getMaxConcurrency(mode, runCount, reviewCount);
+    const runCountInt = Math.max(1, Number.parseInt(runCount || "1", 10) || 1);
+    const reviewCountInt = Math.max(1, Number.parseInt(reviewCount || "1", 10) || 1);
+    const max = getWorkflowUI(mode).getMaxConcurrency(runCountInt, reviewCountInt);
     const parsed = Number.parseInt(value, 10);
     if (Number.isNaN(parsed)) {
       setConcurrency(String(max));
@@ -303,14 +304,15 @@ export function NewBatchDrawer() {
   if (headSha) baseRefOptions.push({ value: headSha, label: `${headSha} (HEAD)` });
   if (baseRefOptions.length === 0) baseRefOptions.push({ value: "", label: "Current HEAD" });
 
+  const workflow = getWorkflowUI(mode);
+  const runCountInt = Math.max(1, Number.parseInt(runCount || "1", 10) || 1);
+  const reviewCountInt = Math.max(1, Number.parseInt(reviewCount || "1", 10) || 1);
+  const concurrencyLimit = workflow.getMaxConcurrency(runCountInt, reviewCountInt);
+  const concurrencyHint = workflow.getConcurrencyHint(concurrencyLimit);
   const canSubmit =
     projectPath.trim().length > 0 &&
     Boolean(inspect) &&
-    ((mode === "repeated" || mode === "ranked") ? prompt.trim().length > 0 : taskPrompt.trim().length > 0) && (mode !== "ranked" || reviewPrompt.trim().length > 0);
-  const concurrencyLimit = getMaxConcurrency(mode, runCount, reviewCount);
-  const concurrencyHint = mode === "ranked"
-    ? `Max ${concurrencyLimit} shared across candidate and reviewer runs.`
-    : `Max ${concurrencyLimit} parallel runs.`;
+    workflow.canSubmit({ prompt, taskPrompt, reviewPrompt });
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -320,9 +322,7 @@ export function NewBatchDrawer() {
     try {
       const normalizedRunCount = Math.max(1, Number.parseInt(runCount || "1", 10) || 1);
       const normalizedReviewCount = Math.max(1, Number.parseInt(reviewCount || "1", 10) || 1);
-      const maxConcurrency = mode === "ranked"
-        ? normalizedRunCount * normalizedReviewCount
-        : normalizedRunCount;
+      const maxConcurrency = getWorkflowUI(mode).getMaxConcurrency(normalizedRunCount, normalizedReviewCount);
       const normalizedConcurrency = Math.max(
         1,
         Math.min(Number.parseInt(concurrency || String(normalizedRunCount), 10) || normalizedRunCount, maxConcurrency),
@@ -405,42 +405,18 @@ export function NewBatchDrawer() {
           <div className="form-section">
             <label className="form-label">Mode</label>
             <div className="segmented">
-              <button
-                className={`seg-btn${mode === "repeated" ? " is-active" : ""}`}
-                data-mode="repeated"
-                type="button"
-                onClick={() => handleModeChange("repeated")}
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="17 1 21 5 17 9" />
-                  <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-                  <polyline points="7 23 3 19 7 15" />
-                  <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-                </svg>
-                Repeated
-              </button>
-              <button
-                className={`seg-btn${mode === "generated" ? " is-active" : ""}`}
-                data-mode="generated"
-                type="button"
-                onClick={() => handleModeChange("generated")}
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                </svg>
-                Generated
-              </button>
-              <button
-                className={`seg-btn${mode === "ranked" ? " is-active" : ""}`}
-                data-mode="ranked"
-                type="button"
-                onClick={() => handleModeChange("ranked")}
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                </svg>
-                Ranked
-              </button>
+              {getAllWorkflowUIs().map((wf) => (
+                <button
+                  key={wf.mode}
+                  className={`seg-btn${mode === wf.mode ? " is-active" : ""}`}
+                  data-mode={wf.mode}
+                  type="button"
+                  onClick={() => handleModeChange(wf.mode)}
+                >
+                  <wf.Icon />
+                  {wf.label}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -584,76 +560,12 @@ export function NewBatchDrawer() {
           </div>
 
           {/* Prompt / Task Prompt */}
-          {mode === "repeated" ? (
-            <div className="form-section">
-              <label className="form-label" htmlFor="prompt">Prompt</label>
-              <textarea
-                id="prompt"
-                name="prompt"
-                rows={8}
-                value={prompt}
-                placeholder="Describe the task to repeat across all runs."
-                onChange={(e) => setPrompt(e.target.value)}
-              />
-            </div>
-          ) : mode === "generated" ? (
-            <div className="form-section">
-              <label className="form-label" htmlFor="taskPrompt">Task Generation Prompt</label>
-              <textarea
-                id="taskPrompt"
-                name="taskPrompt"
-                rows={8}
-                value={taskPrompt}
-                placeholder="Describe how Codex should split work into independent tasks."
-                onChange={(e) => setTaskPrompt(e.target.value)}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="form-section">
-                <label className="form-label" htmlFor="prompt">Task Prompt</label>
-                <textarea
-                  id="prompt"
-                  name="prompt"
-                  rows={8}
-                  value={prompt}
-                  placeholder="Describe the coding task each candidate agent should execute."
-                  onChange={(e) => setPrompt(e.target.value)}
-                />
-              </div>
-              <div className="form-grid-2">
-                <div className="form-section">
-                  <label className="form-label" htmlFor="reviewCount">Review Runs</label>
-                  <input
-                    id="reviewCount"
-                    name="reviewCount"
-                    min="1"
-                    max="50"
-                    type="number"
-                    value={reviewCount}
-                    required
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setReviewCount(value);
-                      syncMaxConcurrency(runCount, mode, value);
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="form-section">
-                <label className="form-label" htmlFor="reviewPrompt">Review Prompt</label>
-                <textarea
-                  id="reviewPrompt"
-                  name="reviewPrompt"
-                  rows={6}
-                  value={reviewPrompt}
-                  placeholder="Tell reviewer agents how to score candidate runs."
-                  onChange={(e) => setReviewPrompt(e.target.value)}
-                />
-                <span className="form-hint">XML branch metadata is added automatically.</span>
-              </div>
-            </>
-          )}
+          <workflow.FormFields
+            prompt={prompt} setPrompt={setPrompt}
+            taskPrompt={taskPrompt} setTaskPrompt={setTaskPrompt}
+            reviewPrompt={reviewPrompt} setReviewPrompt={setReviewPrompt}
+            reviewCount={reviewCount} setReviewCount={handleReviewCountChange}
+          />
 
           {/* Execution Options */}
           <div className="form-divider">

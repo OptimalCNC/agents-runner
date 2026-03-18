@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { Run } from "../types.js";
 import { useAppStore, selectSelectedBatch } from "../state/store.js";
 import type { RunDetailTab } from "../state/navigation.js";
+import { getWorkflowUI } from "../workflows/registry.js";
 import { formatDate } from "../utils/format.js";
 import { StatusPill } from "./StatusPill.js";
 import { SessionPanel } from "./SessionPanel.js";
@@ -50,8 +51,9 @@ export function RunDetail({ run }: Props) {
   const selectedBatch = useAppStore(selectSelectedBatch);
   const activePanel = useAppStore((state) => state.activeTab);
 
-  const rankedSessionReadOnly = selectedBatch?.mode === "ranked";
-  const showReviewPanel = run?.kind !== "reviewer";
+  const workflow = selectedBatch ? getWorkflowUI(selectedBatch.mode) : null;
+  const rankedSessionReadOnly = workflow?.isSessionReadOnly ?? false;
+  const showReviewPanel = run ? (workflow?.showReviewTab(run) ?? true) : true;
 
   useEffect(() => {
     if (activePanel === "review" && !showReviewPanel) {

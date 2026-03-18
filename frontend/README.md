@@ -44,6 +44,13 @@ frontend/
     │   ├── format.ts     # Date, status, mode, reasoning-effort formatting
     │   ├── markdown.ts   # marked.parse + DOMPurify.sanitize wrapper
     │   └── paths.ts      # deriveParentPath, getPathLeaf, getProjectPath
+    ├── workflows/        # Per-mode UI modules (mirrors backend src/lib/workflows/)
+    │   ├── types.ts      # WorkflowUI interface + FormFieldsProps, RunsGridProps, RunCardExtras
+    │   ├── shared.ts     # Shared helpers: normalizeScore, formatRunStatusLabel
+    │   ├── registry.ts   # getWorkflowUI(mode) / getAllWorkflowUIs() registry
+    │   ├── repeated.tsx  # Repeated mode: flat prompt, flat runs grid
+    │   ├── generated.tsx # Generated mode: task-gen prompt, tasks section, flat grid
+    │   └── ranked.tsx    # Ranked mode: reviewer glance, candidate grid, scoring
     ├── components/
     │   ├── Navbar.tsx
     │   ├── Sidebar.tsx
@@ -263,6 +270,7 @@ Styles live in `src/styles/index.css` (copied from the original `public/styles.c
 
 ## Key Patterns & Conventions
 
+- **Batch modes are plug-and-play.** All mode-specific UI logic lives in `src/workflows/`. `NewBatchDrawer`, `BatchDetail`, `RunDetail`, and `RunCard` delegate to `getWorkflowUI(mode)` from the registry — adding a new mode only requires a new file in `workflows/` and a registry entry. See `WORKFLOWS.md` for the full guide.
 - **Signals for global state, `useState` for local UI state** (form fields, loading flags, toggle states inside a single component).
 - **`useEffect` + `useRef`** for DOM side-effects: dialog open/close, debounce timers, focus management.
 - **No routing library.** Navigation is entirely signal-driven (`selectedBatchId`, `selectedRunId`, `activeTab`). Do not add a router without discussion.

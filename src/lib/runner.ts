@@ -15,6 +15,8 @@ import {
 } from "./git";
 import { isAbortError } from "./process";
 import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
+import { getWorkflow } from "./workflows/registry";
+import { extractReviewerScoreFromMcp } from "./workflows/shared";
 
 import type {
   Batch,
@@ -51,7 +53,7 @@ interface ExecutionState {
 
 const executionRegistry = new Map<string, ExecutionState>();
 
-function nowIso(): string {
+export function nowIso(): string {
   return new Date().toISOString();
 }
 
@@ -71,15 +73,6 @@ function truncateText(value: unknown, limit: number = MAX_TEXT_LENGTH): string {
   }
 
   return `${text.slice(0, limit)}\n\n...truncated...`;
-}
-
-function escapeXml(value: unknown): string {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;")
-    .replaceAll("'", "&apos;");
 }
 
 function compactJson(value: unknown): unknown {
@@ -144,7 +137,7 @@ function appendLog(run: Run, level: string, message: string): void {
   }
 }
 
-function getCodexClient(config: Record<string, unknown> = {}): InstanceType<typeof Codex> {
+export function getCodexClient(config: Record<string, unknown> = {}): InstanceType<typeof Codex> {
   return new Codex({
     apiKey: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
     baseUrl: process.env.OPENAI_BASE_URL || process.env.CODEX_BASE_URL,
@@ -152,7 +145,7 @@ function getCodexClient(config: Record<string, unknown> = {}): InstanceType<type
   });
 }
 
-function getExecutionState(batchId: string): ExecutionState {
+export function getExecutionState(batchId: string): ExecutionState {
   if (!executionRegistry.has(batchId)) {
     executionRegistry.set(batchId, {
       titleController: null,
@@ -168,7 +161,7 @@ function clearExecutionState(batchId: string): void {
   executionRegistry.delete(batchId);
 }
 
-function maybeClearExecutionState(batchId: string, execution: ExecutionState | undefined): void {
+export function maybeClearExecutionState(batchId: string, execution: ExecutionState | undefined): void {
   if (!execution) {
     return;
   }
@@ -323,7 +316,7 @@ function syncRunDerivedState(run: Run): void {
 const CREATED_BRANCH_LOG_PREFIX = "Created branch ";
 const CREATED_BRANCH_LOG_SUFFIX = ".";
 
-function getRunCreatedBranchName(run: Run): string | null {
+export function getRunCreatedBranchName(run: Run): string | null {
   for (let index = run.logs.length - 1; index >= 0; index -= 1) {
     const message = String(run.logs[index]?.message ?? "");
     if (!message.startsWith(CREATED_BRANCH_LOG_PREFIX) || !message.endsWith(CREATED_BRANCH_LOG_SUFFIX)) {
@@ -538,7 +531,28 @@ export function createRunId(index: number): string {
   return `run-${index + 1}`;
 }
 
-function buildRunRecord(
+function escapeXml(value: unknown): string {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function buildCandidateDeveloperInstructions(branchName: string): string {
+  return [
+    "Work on the branch in the metadata below and produce exactly one commit for this run.",
+    "Use `agents-runner-workflow.create_commit` to create the commit instead of running `git commit` directly.",
+    "Use the worktree root from `git rev-parse --show-toplevel` as `working_folder`, and include only task-relevant files.",
+    "",
+    "<ranked_candidate_metadata>",
+    `  <branch>${escapeXml(branchName)}</branch>`,
+    "</ranked_candidate_metadata>",
+  ].join("\n");
+}
+
+export function buildRunRecord(
   task: GenerationTask,
   index: number,
   kind: "candidate" | "reviewer" = "candidate",
@@ -571,193 +585,7 @@ function buildRunRecord(
 }
 
 
-function normalizeNumericScore(value: unknown): number | null {
-  const parsed = Number(String(value ?? "").trim());
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-
-  return Math.max(0, Math.min(100, parsed));
-}
-
-function buildCandidateDeveloperInstructions(branchName: string): string {
-  return [
-    "Work on the branch in the metadata below and produce exactly one commit for this run.",
-    "Use `agents-runner-workflow.create_commit` to create the commit instead of running `git commit` directly.",
-    "Use the worktree root from `git rev-parse --show-toplevel` as `working_folder`, and include only task-relevant files.",
-    "",
-    "<ranked_candidate_metadata>",
-    `  <branch>${escapeXml(branchName)}</branch>`,
-    "</ranked_candidate_metadata>",
-  ].join("\n");
-}
-
-function buildReviewRunTitle(candidateRun: Run, reviewIndex: number): string {
-  return `Review ${reviewIndex + 1} for ${candidateRun.title}`;
-}
-
-function buildReviewTasks(batch: Batch, candidateRun: Run): Array<GenerationTask & { reviewedRunId: string }> {
-  return Array.from({ length: batch.config.reviewCount }, (_, reviewIndex) => ({
-    title: buildReviewRunTitle(candidateRun, reviewIndex),
-    prompt: buildReviewPrompt(batch),
-    reviewedRunId: candidateRun.id,
-  }));
-}
-
-export function buildReviewPrompt(batch: Batch): string {
-  const originalTask = batch.config.prompt.trim() || "(task unavailable)";
-
-  return [
-    batch.config.reviewPrompt.trim(),
-    "",
-    "The task is to:",
-    "````markdown",
-    originalTask,
-    "````",
-  ].join("\n");
-}
-
-function buildReviewerDeveloperInstructions(batch: Batch, candidateRun: Run, reviewedRunId: string): string {
-  const candidateBranch = getRunCreatedBranchName(candidateRun) || "(branch unavailable)";
-  const baseBranch = candidateRun.baseRef || batch.config.baseRef || batch.projectContext?.branchName || batch.projectContext?.headSha || "(base unavailable)";
-
-  return [
-    "Review the task branch against the base branch from the metadata below before scoring.",
-    "Submit exactly one score with `agents-runner-workflow.submit_score` instead of reporting the score only in plain text.",
-    "Use the worktree root from `git rev-parse --show-toplevel` as `working_folder`. Keep the score between 0 and 100, and keep the reason concise and specific.",
-    "",
-    "<ranked_review_metadata>",
-    `  <reviewed_run_id>${escapeXml(reviewedRunId)}</reviewed_run_id>`,
-    `  <task_branch>${escapeXml(candidateBranch)}</task_branch>`,
-    `  <base_branch>${escapeXml(baseBranch)}</base_branch>`,
-    "</ranked_review_metadata>",
-  ].join("\n");
-}
-
-function extractReviewerScoreFromMcp(reviewRun: Run): number | null {
-  for (let turnIndex = reviewRun.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-    const turn = reviewRun.turns[turnIndex];
-    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-      const item = turn.items[itemIndex] as Record<string, unknown>;
-      if (item.type !== "mcp_tool_call") {
-        continue;
-      }
-
-      if (String(item.server ?? "") !== "agents-runner-workflow" || String(item.tool ?? "") !== "submit_score") {
-        continue;
-      }
-
-      if (String(item.status ?? "") !== "completed") {
-        continue;
-      }
-
-      const result = item.result as Record<string, unknown> | undefined;
-      const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
-      const score = normalizeNumericScore(structured?.score);
-      if (score !== null) {
-        return score;
-      }
-    }
-  }
-
-  return null;
-}
-
-function recomputeRankedScores(store: BatchStore, batchId: string): void {
-  const batch = store.getBatch(batchId);
-  if (!batch || batch.mode !== "ranked") {
-    return;
-  }
-
-  const reviewerRuns = batch.runs.filter((run) => run.kind === "reviewer");
-  applyCandidateScores(store, batchId, reviewerRuns);
-}
-
-function applyCandidateScores(store: BatchStore, batchId: string, reviewRuns: Run[]): void {
-  const scoreMap = new Map<string, number[]>();
-  const reviewerScoreMap = new Map<string, number>();
-
-  for (const reviewRun of reviewRuns) {
-    const reviewedRunId = String(reviewRun.reviewedRunId ?? "").trim();
-    if (!reviewedRunId) {
-      continue;
-    }
-
-    const score = extractReviewerScoreFromMcp(reviewRun);
-    if (score === null) {
-      continue;
-    }
-
-    reviewerScoreMap.set(reviewRun.id, score);
-
-    if (!scoreMap.has(reviewedRunId)) {
-      scoreMap.set(reviewedRunId, []);
-    }
-    scoreMap.get(reviewedRunId)!.push(score);
-  }
-
-  const batch = store.getBatch(batchId);
-  if (!batch || batch.mode !== "ranked") {
-    return;
-  }
-
-  const candidateRuns = batch.runs.filter((run) => run.kind !== "reviewer");
-  const candidateScoreMap = new Map<string, number | null>();
-  const candidateRankMap = new Map<string, number | null>();
-
-  for (const run of candidateRuns) {
-    const values = scoreMap.get(run.id) || [];
-    candidateScoreMap.set(
-      run.id,
-      values.length > 0
-        ? Number((values.reduce((acc, value) => acc + value, 0) / values.length).toFixed(2))
-        : null,
-    );
-    candidateRankMap.set(run.id, null);
-  }
-
-  const rankedRuns = candidateRuns
-    .filter((run) => candidateScoreMap.get(run.id) !== null)
-    .sort((left, right) => Number(candidateScoreMap.get(right.id) ?? -1) - Number(candidateScoreMap.get(left.id) ?? -1));
-
-  for (const [index, run] of rankedRuns.entries()) {
-    candidateRankMap.set(run.id, index + 1);
-  }
-
-  for (const run of batch.runs) {
-    if (run.kind === "reviewer") {
-      const nextScore = reviewerScoreMap.get(run.id) ?? null;
-      if ((run.score ?? null) === nextScore && (run.rank ?? null) === null) {
-        continue;
-      }
-
-      store.updateRun(batchId, run.id, (mutableRun) => {
-        mutableRun.score = nextScore;
-        mutableRun.rank = null;
-      });
-      continue;
-    }
-
-    const nextScore = candidateScoreMap.get(run.id) ?? null;
-    const nextRank = candidateRankMap.get(run.id) ?? null;
-    if ((run.score ?? null) === nextScore && (run.rank ?? null) === nextRank) {
-      continue;
-    }
-
-    store.updateRun(batchId, run.id, (mutableRun) => {
-      mutableRun.score = nextScore;
-      mutableRun.rank = nextRank;
-    });
-  }
-}
-
-function listReviewerRunsForCandidate(batch: Batch, candidateRunId: string): Run[] {
-  return batch.runs
-    .filter((run) => run.kind === "reviewer" && run.reviewedRunId === candidateRunId)
-    .sort((left, right) => left.index - right.index);
-}
-
-function finalizeQueuedRun(
+export function finalizeQueuedRun(
   store: BatchStore,
   batchId: string,
   runId: string,
@@ -780,7 +608,7 @@ function finalizeQueuedRun(
   });
 }
 
-function cancelQueuedRuns(store: BatchStore, batchId: string, message: string): void {
+export function cancelQueuedRuns(store: BatchStore, batchId: string, message: string): void {
   const batch = store.getBatch(batchId);
   if (!batch) {
     return;
@@ -793,42 +621,6 @@ function cancelQueuedRuns(store: BatchStore, batchId: string, message: string): 
 
     finalizeQueuedRun(store, batchId, run.id, "cancelled", message);
   }
-}
-
-function buildTaskSchema(count: number): Record<string, unknown> {
-  return {
-    type: "object",
-    additionalProperties: false,
-    required: ["tasks"],
-    properties: {
-      tasks: {
-        type: "array",
-        minItems: count,
-        maxItems: count,
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["title", "prompt"],
-          properties: {
-            title: { type: "string", minLength: 1, maxLength: 120 },
-            prompt: { type: "string", minLength: 1 },
-          },
-        },
-      },
-    },
-  };
-}
-
-function buildTaskGenerationPrompt(userPrompt: string, count: number): string {
-  return [
-    userPrompt.trim(),
-    "",
-    `Generate exactly ${count} coding tasks for parallel Codex execution.`,
-    "Each task will run in its own git worktree cloned from the same repository state.",
-    "Prefer tasks that do not overlap heavily in files or responsibilities.",
-    "Each prompt must be self-contained, concrete, and directly runnable by an autonomous coding agent.",
-    'Return only JSON that matches the provided schema with a top-level "tasks" array.',
-  ].join("\n");
 }
 
 function getProjectFolderName(projectPath: string | null | undefined): string {
@@ -1008,68 +800,9 @@ function reconcileSettledBatchRuns(store: BatchStore, batchId: string): void {
     });
   }
 
-  if (batch.mode === "ranked") {
-    recomputeRankedScores(store, batchId);
-  }
-}
-
-async function generateTasks(store: BatchStore, batchId: string, projectContext: ProjectContext): Promise<GenerationTask[]> {
-  const batch = store.getBatch(batchId)!;
-  const execution = getExecutionState(batchId);
-  const controller = new AbortController();
-  execution.generationController = controller;
-
-  store.updateBatch(batchId, (mutableBatch) => {
-    mutableBatch.generation!.status = "running";
-    mutableBatch.generation!.startedAt = nowIso();
-    mutableBatch.generation!.error = null;
-  });
-
-  try {
-    const codex = getCodexClient();
-    const thread = codex.startThread({
-      model: batch.config.model || undefined,
-      sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
-      approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
-      workingDirectory: projectContext.projectPath,
-      networkAccessEnabled: batch.config.networkAccessEnabled,
-      webSearchEnabled: batch.config.webSearchMode !== "disabled",
-      webSearchMode: batch.config.webSearchMode as "disabled" | "live",
-      modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
-    });
-
-    const result = await thread.run(buildTaskGenerationPrompt(batch.config.taskPrompt, batch.config.runCount), {
-      signal: controller.signal,
-      outputSchema: buildTaskSchema(batch.config.runCount),
-    });
-
-    const parsed = JSON.parse(result.finalResponse) as { tasks: Array<{ title?: string; prompt: string }> };
-    const tasks: GenerationTask[] = parsed.tasks.map((task, index) => ({
-      title: task.title || `Task ${index + 1}`,
-      prompt: task.prompt,
-    }));
-
-    store.updateBatch(batchId, (mutableBatch) => {
-      mutableBatch.generation!.status = "completed";
-      mutableBatch.generation!.completedAt = nowIso();
-      mutableBatch.generation!.tasks = tasks;
-    });
-
-    return tasks;
-  } catch (error) {
-    const message = isAbortError(error) ? "Task generation cancelled." : (error as Error).message;
-
-    store.updateBatch(batchId, (mutableBatch) => {
-      mutableBatch.generation!.status = isAbortError(error) ? "cancelled" : "failed";
-      mutableBatch.generation!.completedAt = nowIso();
-      mutableBatch.generation!.error = message;
-      mutableBatch.error = message;
-    });
-
-    throw error;
-  } finally {
-    execution.generationController = null;
-    maybeClearExecutionState(batchId, execution);
+  const settledBatch = store.getBatch(batchId);
+  if (settledBatch) {
+    getWorkflow(settledBatch.mode).onBatchSettled(store, batchId);
   }
 }
 
@@ -1079,7 +812,7 @@ export async function generateBatchTitle(store: BatchStore, batchId: string): Pr
     return null;
   }
 
-  const sourcePrompt = batch.mode === "generated" ? batch.config.taskPrompt : batch.config.prompt;
+  const sourcePrompt = getWorkflow(batch.mode).getTitleSourcePrompt(batch);
   if (!sourcePrompt) {
     return batch.title;
   }
@@ -1213,7 +946,10 @@ async function streamTurnEvents(
     });
 
     if (shouldRecomputeRankedScores) {
-      recomputeRankedScores(store, batchId);
+      const scoresBatch = store.getBatch(batchId);
+      if (scoresBatch) {
+        getWorkflow(scoresBatch.mode).onScoreSubmitted(store, batchId);
+      }
     }
   }
 }
@@ -1310,7 +1046,7 @@ interface ExecuteRunOptions {
   developerInstructions?: string;
 }
 
-async function executeRun(
+export async function executeRun(
   store: BatchStore,
   batchId: string,
   runId: string,
@@ -1472,61 +1208,7 @@ async function executeRun(
   }
 }
 
-async function executeReviewerRun(
-  store: BatchStore,
-  batchId: string,
-  runId: string,
-  projectContext: ProjectContext,
-): Promise<void> {
-  const batch = store.getMutableBatch(batchId);
-  if (!batch || batch.cancelRequested) {
-    finalizeQueuedRun(store, batchId, runId, "cancelled", "Batch cancelled before review start.");
-    return;
-  }
-
-  const reviewRun = batch.runs.find((entry) => entry.id === runId);
-  if (!reviewRun || reviewRun.kind !== "reviewer" || reviewRun.status !== "queued") {
-    return;
-  }
-
-  const reviewedRun = batch.runs.find((entry) => entry.id === reviewRun.reviewedRunId);
-  if (!reviewedRun) {
-    finalizeQueuedRun(store, batchId, runId, "failed", "Reviewed run is unavailable.");
-    return;
-  }
-
-  const reviewedWorkingDirectory = reviewedRun.workingDirectory || reviewedRun.worktreePath || null;
-  const prompt = buildReviewPrompt(batch);
-
-  store.updateRun(batchId, runId, (run) => {
-    run.prompt = prompt;
-    const turn = run.turns[0];
-    if (turn && turn.status === "queued") {
-      turn.prompt = prompt;
-    }
-  });
-
-  if (!reviewedWorkingDirectory) {
-    finalizeQueuedRun(store, batchId, runId, "failed", "Reviewed run workspace is unavailable.");
-    return;
-  }
-
-  await executeRun(store, batchId, runId, projectContext, {
-    sandboxModeOverride: "read-only",
-    workingDirectoryOverride: reviewedWorkingDirectory,
-    promptOverride: prompt,
-    developerInstructions: buildReviewerDeveloperInstructions(batch, reviewedRun, String(reviewRun.reviewedRunId ?? "")),
-  });
-}
-
-function getRankedExecutionConcurrency(batch: Batch): number {
-  return Math.max(
-    1,
-    Math.min(batch.config.concurrency, batch.config.runCount * Math.max(1, batch.config.reviewCount)),
-  );
-}
-
-async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+export async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
   let index = 0;
   const activeWorkers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, async () => {
     while (true) {
@@ -1542,114 +1224,6 @@ async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (i
   });
 
   await Promise.all(activeWorkers);
-}
-
-interface RankedScheduledTask {
-  kind: "candidate" | "reviewer";
-  runId: string;
-}
-
-async function executeRankedBatch(
-  store: BatchStore,
-  batchId: string,
-  projectContext: ProjectContext,
-  candidateRuns: Run[],
-): Promise<void> {
-  const rankedBatch = store.getBatch(batchId)!;
-  const reviewTaskEntries = candidateRuns.flatMap((candidateRun) => buildReviewTasks(rankedBatch, candidateRun));
-
-  for (const [index, task] of reviewTaskEntries.entries()) {
-    const run = buildRunRecord(task, candidateRuns.length + index, "reviewer", task.reviewedRunId);
-    store.appendRun(batchId, run);
-  }
-
-  const readyQueue: RankedScheduledTask[] = candidateRuns.map((run) => ({
-    kind: "candidate",
-    runId: run.id,
-  }));
-  const enqueuedReviewerRunIds = new Set<string>();
-  const activeTasks = new Set<Promise<void>>();
-  const concurrency = getRankedExecutionConcurrency(store.getBatch(batchId)!);
-
-  function enqueueReviewerRuns(candidateRunId: string): void {
-    const currentBatch = store.getBatch(batchId);
-    if (!currentBatch || currentBatch.mode !== "ranked" || currentBatch.cancelRequested) {
-      return;
-    }
-
-    const nextReviewerTasks: RankedScheduledTask[] = [];
-    for (const reviewerRun of listReviewerRunsForCandidate(currentBatch, candidateRunId)) {
-      if (reviewerRun.status !== "queued" || enqueuedReviewerRunIds.has(reviewerRun.id)) {
-        continue;
-      }
-
-      nextReviewerTasks.push({
-        kind: "reviewer",
-        runId: reviewerRun.id,
-      });
-      enqueuedReviewerRunIds.add(reviewerRun.id);
-    }
-
-    if (nextReviewerTasks.length > 0) {
-      readyQueue.unshift(...nextReviewerTasks);
-    }
-  }
-
-  function launchTask(task: RankedScheduledTask): void {
-    const promise = (async () => {
-      if (task.kind === "candidate") {
-        const mutableBatch = store.getMutableBatch(batchId);
-        if (!mutableBatch || mutableBatch.cancelRequested) {
-          finalizeQueuedRun(store, batchId, task.runId, "cancelled", "Batch cancelled before start.");
-          return;
-        }
-
-        await executeRun(store, batchId, task.runId, projectContext, {
-          autoCreateBranch: true,
-        });
-        enqueueReviewerRuns(task.runId);
-        return;
-      }
-
-      await executeReviewerRun(store, batchId, task.runId, projectContext);
-    })().finally(() => {
-      activeTasks.delete(promise);
-    });
-
-    activeTasks.add(promise);
-  }
-
-  while (readyQueue.length > 0 || activeTasks.size > 0) {
-    const mutableBatch = store.getMutableBatch(batchId);
-    if (mutableBatch?.cancelRequested && readyQueue.length > 0) {
-      while (readyQueue.length > 0) {
-        const task = readyQueue.shift()!;
-        finalizeQueuedRun(
-          store,
-          batchId,
-          task.runId,
-          "cancelled",
-          task.kind === "reviewer" ? "Batch cancelled before review start." : "Batch cancelled before start.",
-        );
-      }
-    }
-
-    while (readyQueue.length > 0 && activeTasks.size < concurrency && !store.getMutableBatch(batchId)?.cancelRequested) {
-      launchTask(readyQueue.shift()!);
-    }
-
-    if (activeTasks.size === 0) {
-      break;
-    }
-
-    await Promise.race(activeTasks);
-  }
-
-  if (store.getMutableBatch(batchId)?.cancelRequested) {
-    cancelQueuedRuns(store, batchId, "Batch cancelled before start.");
-  }
-
-  recomputeRankedScores(store, batchId);
 }
 
 export async function executeBatch(store: BatchStore, batchId: string): Promise<void> {
@@ -1671,13 +1245,8 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
       mutableBatch.projectContext = projectContext;
     });
 
-    const tasks: GenerationTask[] =
-      batch.mode === "generated"
-        ? await generateTasks(store, batchId, projectContext)
-        : Array.from({ length: batch.config.runCount }, (_, index) => ({
-            title: `Run ${index + 1}`,
-            prompt: batch.config.prompt,
-          }));
+    const workflow = getWorkflow(batch.mode);
+    const tasks = await workflow.createTasks(store, batchId, projectContext);
 
     for (const [index, task] of tasks.entries()) {
       const run = buildRunRecord(task, index, "candidate");
@@ -1686,26 +1255,7 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
 
     const latestBatch = store.getBatch(batchId)!;
     const candidateRuns = latestBatch.runs.filter((run) => run.kind !== "reviewer");
-    if (latestBatch.mode === "ranked") {
-      await executeRankedBatch(store, batchId, projectContext, candidateRuns);
-    } else {
-      await runWithConcurrency(candidateRuns, latestBatch.config.concurrency, async (run) => {
-        const mutableBatch = store.getMutableBatch(batchId);
-        if (!mutableBatch || mutableBatch.cancelRequested) {
-          store.updateRun(batchId, run.id, (mutableRun) => {
-            mutableRun.status = "cancelled";
-            mutableRun.completedAt = nowIso();
-            mutableRun.error = "Batch cancelled before start.";
-            appendLog(mutableRun, "warning", mutableRun.error!);
-          });
-          return;
-        }
-
-        await executeRun(store, batchId, run.id, projectContext, {
-          autoCreateBranch: false,
-        });
-      });
-    }
+    await workflow.executeBatchRuns(store, batchId, projectContext, candidateRuns, executeRun);
 
     reconcileSettledBatchRuns(store, batchId);
     store.updateBatch(batchId, (mutableBatch) => {

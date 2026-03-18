@@ -3,6 +3,8 @@ import path from "node:path";
 import type { ServerResponse } from "node:http";
 
 import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
+import { getWorkflow } from "./workflows/registry";
+import { extractReviewerScoreFromMcp, normalizeMode } from "./workflows/shared";
 
 import type {
   Batch,
@@ -65,30 +67,9 @@ function sortBatches(batches: BatchSummary[]): BatchSummary[] {
   return batches.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
-function normalizeMode(value: string | undefined): BatchMode {
-  if (value === "generated" || value === "task-generator") {
-    return "generated";
-  }
-
-  if (value === "ranked" || value === "reviewed") {
-    return "ranked";
-  }
-
-  return "repeated";
-}
-
 function buildBatchMeta(batch: Batch): Omit<Batch, "runs"> {
   const { runs, ...batchMeta } = clone(batch);
   return batchMeta;
-}
-
-function normalizeScore(value: unknown): number | null {
-  const parsed = Number(String(value ?? "").trim());
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-
-  return Math.max(0, Math.min(100, parsed));
 }
 
 function getLatestRunTurn(run: Run): RunTurn | null {
@@ -142,35 +123,6 @@ function syncRunDerivedState(run: Run): void {
   if (!run.startedAt && firstStartedAt) {
     run.startedAt = firstStartedAt;
   }
-}
-
-function extractReviewerScoreFromRun(reviewRun: Run): number | null {
-  for (let turnIndex = reviewRun.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-    const turn = reviewRun.turns[turnIndex];
-    for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-      const item = turn.items[itemIndex] as Record<string, unknown>;
-      if (item.type !== "mcp_tool_call") {
-        continue;
-      }
-
-      if (String(item.server ?? "") !== "agents-runner-workflow" || String(item.tool ?? "") !== "submit_score") {
-        continue;
-      }
-
-      if (String(item.status ?? "") !== "completed") {
-        continue;
-      }
-
-      const result = item.result as Record<string, unknown> | undefined;
-      const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
-      const score = normalizeScore(structured?.score);
-      if (score !== null) {
-        return score;
-      }
-    }
-  }
-
-  return null;
 }
 
 function deriveBatchStatus(batch: Batch): BatchStatus {
@@ -243,7 +195,7 @@ function recomputeRankedScores(batch: Batch): void {
       continue;
     }
 
-    const score = extractReviewerScoreFromRun(reviewRun);
+    const score = extractReviewerScoreFromMcp(reviewRun);
     if (score === null) {
       continue;
     }
@@ -693,15 +645,7 @@ export function createBatchStore(dataDirectory: string): BatchStore {
       cancelRequested: false,
       error: null,
       config,
-      generation: mode === "generated"
-        ? {
-            status: "pending",
-            startedAt: null,
-            completedAt: null,
-            error: null,
-            tasks: [],
-          }
-        : null,
+      generation: getWorkflow(mode).buildInitialBatchState().generation,
       runs: [],
     };
 

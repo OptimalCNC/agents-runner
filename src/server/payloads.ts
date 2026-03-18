@@ -1,6 +1,8 @@
 import path from "node:path";
 
 import { DEFAULT_RUN_COUNT, DEFAULT_SANDBOX_MODE } from "./constants";
+import { getWorkflow } from "../lib/workflows/registry";
+import { normalizeMode } from "../lib/workflows/shared";
 
 import type { BatchMode } from "../types";
 
@@ -19,26 +21,6 @@ export function normalizeString(value: unknown): string {
   return String(value ?? "").trim();
 }
 
-function normalizeMode(value: unknown): BatchMode {
-  if (value === "generated" || value === "task-generator") {
-    return "generated";
-  }
-
-  if (value === "ranked" || value === "reviewed") {
-    return "ranked";
-  }
-
-  return "repeated";
-}
-
-function getMaxConcurrency(mode: BatchMode, runCount: number, reviewCount: number): number {
-  if (mode !== "ranked") {
-    return runCount;
-  }
-
-  return Math.max(1, runCount * Math.max(1, reviewCount));
-}
-
 function getProjectFolderLabel(projectPath: string): string {
   const normalizedPath = String(projectPath ?? "").replace(/[\\/]+$/, "");
   if (!normalizedPath) {
@@ -50,17 +32,16 @@ function getProjectFolderLabel(projectPath: string): string {
 }
 
 function buildFallbackBatchTitle({
-  mode,
+  label,
   runCount,
   projectPath,
 }: {
-  mode: BatchMode;
+  label: string;
   runCount: number;
   projectPath: string;
 }): string {
   const projectLabel = getProjectFolderLabel(projectPath);
-  const modeLabel = mode === "generated" ? "Generated" : "Repeated";
-  return projectLabel ? `${projectLabel} - ${modeLabel} x${runCount}` : `${modeLabel} x${runCount}`;
+  return projectLabel ? `${projectLabel} - ${label} x${runCount}` : `${label} x${runCount}`;
 }
 
 export interface NormalizedCreateBatchPayload {
@@ -87,9 +68,10 @@ export interface NormalizedCreateBatchPayload {
 
 export function normalizeCreateBatchPayload(body: Record<string, unknown>): NormalizedCreateBatchPayload {
   const mode = normalizeMode(body.mode ?? body.workflowType);
+  const workflow = getWorkflow(mode);
   const runCount = normalizeInteger(body.runCount, DEFAULT_RUN_COUNT, 1, MAX_BATCH_RUN_COUNT);
   const reviewCount = normalizeInteger(body.reviewCount, 3, 1, MAX_BATCH_RUN_COUNT);
-  const concurrency = normalizeInteger(body.concurrency, runCount, 1, getMaxConcurrency(mode, runCount, reviewCount));
+  const concurrency = normalizeInteger(body.concurrency, runCount, 1, workflow.getMaxConcurrency(runCount, reviewCount));
   const projectPath = normalizeString(body.projectPath);
   const worktreeRoot = normalizeString(body.worktreeRoot);
   const prompt = normalizeString(body.prompt);
@@ -101,21 +83,7 @@ export function normalizeCreateBatchPayload(body: Record<string, unknown>): Norm
     throw new Error("Project path is required.");
   }
 
-  if (mode === "repeated" && !prompt) {
-    throw new Error("Prompt is required for Repeated mode.");
-  }
-
-  if (mode === "generated" && !taskPrompt) {
-    throw new Error("Task generation prompt is required for Generated mode.");
-  }
-
-  if (mode === "ranked" && !prompt) {
-    throw new Error("Prompt is required for Ranked mode.");
-  }
-
-  if (mode === "ranked" && !reviewPrompt) {
-    throw new Error("Review prompt is required for Ranked mode.");
-  }
+  workflow.validatePayload({ prompt, taskPrompt, reviewPrompt });
 
   const resolvedProjectPath = path.resolve(projectPath);
   const resolvedWorktreeRoot = worktreeRoot
@@ -124,7 +92,7 @@ export function normalizeCreateBatchPayload(body: Record<string, unknown>): Norm
 
   return {
     mode,
-    title: requestedTitle || buildFallbackBatchTitle({ mode, runCount, projectPath: resolvedProjectPath }),
+    title: requestedTitle || buildFallbackBatchTitle({ label: workflow.label, runCount, projectPath: resolvedProjectPath }),
     autoGenerateTitle: !requestedTitle,
     config: {
       runCount,

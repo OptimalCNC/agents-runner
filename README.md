@@ -28,17 +28,7 @@ Open [http://localhost:3000](http://localhost:3000) to launch the UI.
 
 ### Development
 
-Run the backend and frontend dev servers in two terminals:
-
-```bash
-# Terminal 1 — backend (API + SSE), auto-reloads on changes
-bun run dev:backend
-
-# Terminal 2 — frontend (Vite HMR)
-bun run dev:frontend
-```
-
-Open [http://localhost:5173](http://localhost:5173) for the Vite dev server (proxies `/api` and `/events` to the backend on port 3000).
+Development setup, local commands, and workflow-extension notes live in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Credentials
 
