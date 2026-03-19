@@ -574,6 +574,7 @@ button { cursor: pointer; }
 .pill-preparing { background: var(--info-soft); color: var(--info); }
 .pill-waiting-for-codex { background: var(--warning-soft); color: var(--warning); }
 .pill-running { background: var(--accent-soft); color: var(--accent-hover); }
+.pill-blocked { background: var(--warning-soft); color: var(--danger); }
 .pill-completed { background: var(--success-soft); color: var(--success); }
 .pill-failed { background: var(--danger-soft); color: var(--danger); }
 .pill-cancelled { background: var(--warning-soft); color: var(--warning); }

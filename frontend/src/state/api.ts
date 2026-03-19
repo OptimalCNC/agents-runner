@@ -138,6 +138,33 @@ export async function apiContinueRun(batchId: string, runId: string, prompt: str
   );
 }
 
+export async function apiStopRun(batchId: string, runId: string): Promise<{ batch: Batch }> {
+  return fetchJson<{ batch: Batch }>(
+    `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/stop`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function apiRerunRun(batchId: string, runId: string): Promise<{ batch: Batch }> {
+  return fetchJson<{ batch: Batch }>(
+    `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/rerun`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function apiResumeRun(batchId: string, runId: string): Promise<{ batch: Batch }> {
+  return fetchJson<{ batch: Batch }>(
+    `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/resume`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export async function apiReopenRunFollowUps(batchId: string, runId: string): Promise<{ batch: Batch }> {
   return fetchJson<{ batch: Batch }>(
     `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/follow-ups/reopen`,

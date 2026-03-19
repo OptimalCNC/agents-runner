@@ -19,7 +19,7 @@ import {
 } from "./followUps";
 import { isAbortError } from "./process";
 import { hasStrongLatestTurnCompletionEvidence } from "./runCompletion";
-import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
+import { isRunActiveStatus, isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 import { getWorkflow } from "./workflows/registry";
 
 import type {
@@ -49,10 +49,16 @@ const BATCH_SETTLE_TIMEOUT_MS = 5_000;
 const NON_INTERACTIVE_APPROVAL_POLICY = "never" as const;
 let logIdCounter = 0;
 
+type RunAbortReason = "batch_cancel" | "stop" | "rerun";
+
 interface ExecutionState {
   titleController: AbortController | null;
   generationController: AbortController | null;
   runControllers: Map<string, AbortController>;
+  runAbortReasons: Map<string, RunAbortReason>;
+  schedulerPromise: Promise<void> | null;
+  schedulerDirty: boolean;
+  schedulerWake: (() => void) | null;
 }
 
 interface CodexThreadHandle {
@@ -176,6 +182,10 @@ export function getExecutionState(batchId: string): ExecutionState {
       titleController: null,
       generationController: null,
       runControllers: new Map(),
+      runAbortReasons: new Map(),
+      schedulerPromise: null,
+      schedulerDirty: false,
+      schedulerWake: null,
     });
   }
 
@@ -191,7 +201,12 @@ export function maybeClearExecutionState(batchId: string, execution: ExecutionSt
     return;
   }
 
-  if (execution.titleController || execution.generationController || execution.runControllers.size > 0) {
+  if (
+    execution.titleController
+    || execution.generationController
+    || execution.runControllers.size > 0
+    || execution.schedulerPromise
+  ) {
     return;
   }
 
@@ -200,13 +215,45 @@ export function maybeClearExecutionState(batchId: string, execution: ExecutionSt
   }
 }
 
+function abortRunExecution(batchId: string, runId: string, reason: RunAbortReason): void {
+  const execution = executionRegistry.get(batchId);
+  const controller = execution?.runControllers.get(runId);
+  if (!execution || !controller) {
+    return;
+  }
+
+  execution.runAbortReasons.set(runId, reason);
+  controller.abort();
+}
+
 function abortBatchExecution(batchId: string): void {
   const execution = executionRegistry.get(batchId);
   execution?.titleController?.abort();
   execution?.generationController?.abort();
-  for (const controller of execution?.runControllers.values() ?? []) {
-    controller.abort();
+  for (const runId of execution?.runControllers.keys() ?? []) {
+    abortRunExecution(batchId, runId, "batch_cancel");
   }
+}
+
+function notifyBatchScheduler(batchId: string): void {
+  const execution = getExecutionState(batchId);
+  execution.schedulerDirty = true;
+  const wake = execution.schedulerWake;
+  execution.schedulerWake = null;
+  wake?.();
+}
+
+async function waitForBatchSchedulerSignal(execution: ExecutionState): Promise<void> {
+  if (execution.schedulerDirty) {
+    execution.schedulerDirty = false;
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    execution.schedulerWake = () => resolve();
+  });
+  execution.schedulerWake = null;
+  execution.schedulerDirty = false;
 }
 
 function getBatchWorktreeRuns(batch: Batch): Run[] {
@@ -737,28 +784,57 @@ function describeItem(item: Record<string, unknown>): string {
   }
 }
 
+function getBlockingRunIds(batch: Batch): string[] {
+  return getWorkflow(batch.mode).getBlockingRunIds(batch);
+}
+
+function getReadyQueuedRunIds(batch: Batch): string[] {
+  if (batch.cancelRequested) {
+    return [];
+  }
+
+  const workflow = getWorkflow(batch.mode);
+  return batch.runs
+    .filter((run) => run.status === "queued" && workflow.isRunReady(batch, run))
+    .map((run) => run.id);
+}
+
+function isBlockingRun(batch: Batch, runId: string): boolean {
+  return getBlockingRunIds(batch).includes(runId);
+}
+
 function deriveBatchStatus(batch: Batch): BatchStatus {
-  if (batch.cancelRequested && batch.runs.every((run) => isRunTerminalStatus(run.status))) {
-    return "cancelled";
+  if (batch.cancelRequested) {
+    return batch.runs.every((run) => isRunTerminalStatus(run.status)) ? "cancelled" : "running";
+  }
+
+  const hasActiveRuns = batch.runs.some((run) => isRunActiveStatus(run.status));
+  if (hasActiveRuns) {
+    return "running";
+  }
+
+  const readyQueuedRunIds = getReadyQueuedRunIds(batch);
+  if (readyQueuedRunIds.length > 0) {
+    return "running";
+  }
+
+  if (getBlockingRunIds(batch).length > 0) {
+    return "blocked";
   }
 
   if (batch.runs.some((run) => run.status === "failed")) {
     return "failed";
   }
 
-  if (batch.runs.length > 0 && batch.runs.every((run) => run.status === "completed")) {
-    return "completed";
+  if (batch.startedAt && batch.status === "failed" && batch.runs.length === 0) {
+    return "failed";
   }
 
-  if (batch.runs.some((run) => isRunPendingStatus(run.status))) {
-    return "running";
+  if (batch.runs.length === 0) {
+    return batch.startedAt ? "running" : "queued";
   }
 
-  if (batch.cancelRequested) {
-    return "cancelled";
-  }
-
-  return "queued";
+  return "completed";
 }
 
 function getRunTerminalTimestamp(run: Run): string {
@@ -784,6 +860,7 @@ function appendLogIfChanged(run: Run, level: string, message: string): void {
 interface FinalizeStreamedTurnOptions {
   completedMessage: string;
   cancelled?: boolean;
+  cancelMessage?: string;
   streamErrorMessage?: string | null;
 }
 
@@ -814,7 +891,7 @@ function finalizeStreamedTurn(run: Run, turn: RunTurn, options: FinalizeStreamed
   if (options.cancelled) {
     turn.status = "cancelled";
     turn.completedAt ||= nowIso();
-    turn.error = "Batch cancelled.";
+    turn.error = String(options.cancelMessage ?? "").trim() || "Batch cancelled.";
     appendLogIfChanged(run, "warning", turn.error);
     syncRunDerivedState(run);
     return;
@@ -827,53 +904,40 @@ function finalizeStreamedTurn(run: Run, turn: RunTurn, options: FinalizeStreamed
   syncRunDerivedState(run);
 }
 
-function reconcileSettledBatchRuns(store: BatchStore, batchId: string): void {
+function refreshBatchLifecycleState(store: BatchStore, batchId: string): Batch | null {
+  const before = store.getBatch(batchId);
+  if (!before) {
+    return null;
+  }
+
+  const workflow = getWorkflow(before.mode);
+  workflow.reconcileLifecycle(store, batchId);
+
   const batch = store.getBatch(batchId);
   if (!batch) {
-    return;
+    return null;
   }
 
-  const pendingRunIds = batch.runs
-    .filter((run) => isRunPendingStatus(run.status))
-    .map((run) => run.id);
+  const nextStatus = deriveBatchStatus(batch);
+  const shouldNotifySettled = before.status !== nextStatus && (nextStatus === "completed" || nextStatus === "cancelled");
 
-  if (pendingRunIds.length === 0) {
-    return;
+  store.updateBatch(batchId, (mutableBatch) => {
+    mutableBatch.status = nextStatus;
+    mutableBatch.completedAt =
+      nextStatus === "completed" || nextStatus === "cancelled" || nextStatus === "failed"
+        ? (mutableBatch.completedAt || nowIso())
+        : null;
+
+    if (nextStatus !== "failed" && nextStatus !== "cancelled") {
+      mutableBatch.error = null;
+    }
+  });
+
+  if (shouldNotifySettled) {
+    workflow.onBatchSettled(store, batchId);
   }
 
-  for (const runId of pendingRunIds) {
-    store.updateRun(batchId, runId, (run) => {
-      const latestTurn = getLatestRunTurn(run);
-      if (!latestTurn) {
-        return;
-      }
-
-      if (!isRunPendingStatus(latestTurn.status)) {
-        syncRunDerivedState(run);
-        return;
-      }
-
-      latestTurn.completedAt ||= getRunTerminalTimestamp(run);
-
-      if (batch.cancelRequested) {
-        latestTurn.status = "cancelled";
-        latestTurn.error ||= "Batch cancelled.";
-      } else if (hasStrongLatestTurnCompletionEvidence(run)) {
-        latestTurn.status = "completed";
-        latestTurn.error = null;
-      } else {
-        latestTurn.status = "failed";
-        latestTurn.error ||= "Run ended without reaching a terminal state.";
-      }
-
-      syncRunDerivedState(run);
-    });
-  }
-
-  const settledBatch = store.getBatch(batchId);
-  if (settledBatch) {
-    getWorkflow(settledBatch.mode).onBatchSettled(store, batchId);
-  }
+  return store.getBatch(batchId);
 }
 
 export async function generateBatchTitle(store: BatchStore, batchId: string): Promise<string | null> {
@@ -1024,15 +1088,9 @@ async function streamTurnEvents(
 
 function releaseRunExecution(store: BatchStore, batchId: string, runId: string, execution: ExecutionState): void {
   execution.runControllers.delete(runId);
-
-  store.updateBatch(batchId, (mutableBatch) => {
-    mutableBatch.status = deriveBatchStatus(mutableBatch);
-    mutableBatch.completedAt =
-      mutableBatch.status === "running" || mutableBatch.status === "queued"
-        ? null
-        : nowIso();
-  });
-
+  execution.runAbortReasons.delete(runId);
+  refreshBatchLifecycleState(store, batchId);
+  notifyBatchScheduler(batchId);
   maybeClearExecutionState(batchId, execution);
 }
 
@@ -1140,6 +1198,11 @@ export async function executeRun(
     const turn = getRunTurn(run, initialTurnId);
     if (!turn) {
       return;
+    }
+
+    if (options.promptOverride) {
+      run.prompt = options.promptOverride;
+      turn.prompt = options.promptOverride;
     }
 
     run.startedAt ||= nowIso();
@@ -1256,7 +1319,13 @@ export async function executeRun(
     void refreshRunReview(store, batchId, runId, worktreePath, baseRef);
     return;
   } catch (error) {
-    const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
+    const abortReason = execution.runAbortReasons.get(runId);
+    const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested || Boolean(abortReason);
+    const cancelMessage = abortReason === "stop"
+      ? "Run stopped."
+      : abortReason === "rerun"
+        ? "Run stopped for rerun."
+        : "Batch cancelled.";
 
     store.updateRun(batchId, runId, (run) => {
       const turn = getRunTurn(run, initialTurnId);
@@ -1267,6 +1336,7 @@ export async function executeRun(
       finalizeStreamedTurn(run, turn, {
         completedMessage: "Run completed.",
         cancelled,
+        cancelMessage,
         streamErrorMessage: cancelled ? null : (error as Error).message,
       });
     });
@@ -1298,6 +1368,83 @@ export async function runWithConcurrency<T>(items: T[], concurrency: number, wor
   await Promise.all(activeWorkers);
 }
 
+function launchQueuedRun(
+  store: BatchStore,
+  batchId: string,
+  runId: string,
+  projectContext: ProjectContext,
+  execution: ExecutionState,
+): void {
+  void executeRun(
+    store,
+    batchId,
+    runId,
+    projectContext,
+    getWorkflow(store.getBatch(batchId)!.mode).getRunExecutionOptions(store.getBatch(batchId)!, store.getBatch(batchId)!.runs.find((run) => run.id === runId)!, projectContext),
+  ).catch((error) => {
+    console.error(`Run ${runId} in batch ${batchId} failed to launch`, error);
+  }).finally(() => {
+    maybeClearExecutionState(batchId, execution);
+  });
+}
+
+function startBatchScheduler(store: BatchStore, batchId: string): void {
+  const execution = getExecutionState(batchId);
+  if (execution.schedulerPromise) {
+    notifyBatchScheduler(batchId);
+    return;
+  }
+
+  execution.schedulerDirty = true;
+  execution.schedulerPromise = (async () => {
+    while (true) {
+      const batch = refreshBatchLifecycleState(store, batchId);
+      if (!batch) {
+        return;
+      }
+
+      if (batch.cancelRequested) {
+        cancelQueuedRuns(store, batchId, "Batch cancelled before start.");
+        const cancelledBatch = refreshBatchLifecycleState(store, batchId);
+        if (cancelledBatch?.status === "cancelled" && execution.runControllers.size === 0) {
+          return;
+        }
+      } else {
+        let snapshot = store.getBatch(batchId);
+        while (snapshot && execution.runControllers.size < snapshot.config.concurrency) {
+          const nextRunId = getReadyQueuedRunIds(snapshot)[0];
+          if (!nextRunId) {
+            break;
+          }
+
+          if (!snapshot.projectContext) {
+            throw new Error("Batch is missing its project context.");
+          }
+
+          launchQueuedRun(store, batchId, nextRunId, snapshot.projectContext, execution);
+          snapshot = refreshBatchLifecycleState(store, batchId);
+        }
+      }
+
+      const latest = store.getBatch(batchId);
+      if (!latest) {
+        return;
+      }
+
+      if ((latest.status === "completed" || latest.status === "cancelled" || latest.status === "failed") && execution.runControllers.size === 0) {
+        return;
+      }
+
+      await waitForBatchSchedulerSignal(execution);
+    }
+  })().finally(() => {
+    execution.schedulerPromise = null;
+    execution.schedulerWake = null;
+    execution.schedulerDirty = false;
+    maybeClearExecutionState(batchId, execution);
+  });
+}
+
 export async function executeBatch(store: BatchStore, batchId: string): Promise<void> {
   const batch = store.getBatch(batchId);
   if (!batch) {
@@ -1327,13 +1474,12 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
 
     const latestBatch = store.getBatch(batchId)!;
     const candidateRuns = latestBatch.runs.filter((run) => run.kind === "candidate");
-    await workflow.executeBatchRuns(store, batchId, projectContext, candidateRuns, executeRun);
+    for (const run of await workflow.createAdditionalRuns(store, batchId, projectContext, candidateRuns)) {
+      store.appendRun(batchId, run);
+    }
 
-    reconcileSettledBatchRuns(store, batchId);
-    store.updateBatch(batchId, (mutableBatch) => {
-      mutableBatch.status = deriveBatchStatus(mutableBatch);
-      mutableBatch.completedAt = nowIso();
-    });
+    refreshBatchLifecycleState(store, batchId);
+    startBatchScheduler(store, batchId);
   } catch (error) {
     const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
 
@@ -1350,15 +1496,196 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
         }
       }
     });
-  } finally {
-    execution.generationController?.abort();
-    for (const controller of execution.runControllers.values()) {
-      controller.abort();
-    }
-    execution.generationController = null;
-    execution.runControllers.clear();
-    maybeClearExecutionState(batchId, execution);
   }
+}
+
+async function waitForRunExecutionToStop(
+  store: BatchStore,
+  batchId: string,
+  runId: string,
+  timeoutMs: number = BATCH_SETTLE_TIMEOUT_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const execution = executionRegistry.get(batchId);
+    const run = store.getBatch(batchId)?.runs.find((entry) => entry.id === runId);
+    if (!execution?.runControllers.has(runId) && run && !isRunPendingStatus(run.status)) {
+      return;
+    }
+
+    await sleep(50);
+  }
+
+  throw new Error("Timed out waiting for the run to stop.");
+}
+
+function resetRunForFreshAttempt(run: Run): void {
+  const originalPrompt = run.prompt;
+
+  run.status = "queued";
+  run.startedAt = null;
+  run.completedAt = null;
+  run.threadId = null;
+  run.worktreePath = null;
+  run.workingDirectory = null;
+  run.baseRef = null;
+  run.finalResponse = "";
+  run.error = null;
+  run.usage = null;
+  run.logs = [];
+  run.turns = [buildRunTurn(originalPrompt, run.index, 0)];
+  run.items = [];
+  run.review = null;
+  run.followUpsReopened = false;
+  run.followUpsReopenedAt = null;
+  run.score = null;
+  run.rank = null;
+}
+
+function buildLifecycleResumePrompt(): string {
+  return [
+    "Continue from where you left off.",
+    "Review the previous failure context in this same Codex thread, recover from it, and finish the run.",
+    "Do not restart from scratch unless the earlier attempt already made that necessary.",
+  ].join("\n\n");
+}
+
+export async function stopRun(store: BatchStore, batchId: string, runId: string): Promise<Batch | null> {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
+  }
+
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  if (!runSnapshot) {
+    throw new Error("Run not found.");
+  }
+
+  if (batch.cancelRequested) {
+    throw new Error("Cancelled batches cannot stop individual runs.");
+  }
+
+  if (runSnapshot.status === "failed") {
+    if (!isBlockingRun(batch, runId)) {
+      throw new Error("Only failed runs that are currently blocking workflow progress can be stopped.");
+    }
+
+    store.updateRun(batchId, runId, (run) => {
+      const latestTurn = getLatestRunTurn(run);
+      if (!latestTurn) {
+        return;
+      }
+
+      appendLog(run, "warning", `Run stopped after failure. Previous error: ${run.error || latestTurn.error || "Unknown error"}`);
+      latestTurn.status = "cancelled";
+      latestTurn.completedAt ||= nowIso();
+      latestTurn.error = "Run stopped.";
+      syncRunDerivedState(run);
+    });
+
+    refreshBatchLifecycleState(store, batchId);
+    startBatchScheduler(store, batchId);
+    return store.getBatch(batchId);
+  }
+
+  if (runSnapshot.status === "queued") {
+    store.updateRun(batchId, runId, (run) => {
+      const latestTurn = getLatestRunTurn(run);
+      if (!latestTurn) {
+        return;
+      }
+
+      latestTurn.status = "cancelled";
+      latestTurn.completedAt = nowIso();
+      latestTurn.error = "Run stopped before start.";
+      appendLog(run, "warning", latestTurn.error);
+      syncRunDerivedState(run);
+    });
+
+    refreshBatchLifecycleState(store, batchId);
+    startBatchScheduler(store, batchId);
+    return store.getBatch(batchId);
+  }
+
+  if (!isRunPendingStatus(runSnapshot.status)) {
+    throw new Error("Only queued, active, or blocking failed runs can be stopped.");
+  }
+
+  abortRunExecution(batchId, runId, "stop");
+  await waitForRunExecutionToStop(store, batchId, runId);
+  refreshBatchLifecycleState(store, batchId);
+  startBatchScheduler(store, batchId);
+  return store.getBatch(batchId);
+}
+
+export async function rerunRun(store: BatchStore, batchId: string, runId: string): Promise<Batch | null> {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
+  }
+
+  if (batch.cancelRequested) {
+    throw new Error("Cancelled batches cannot rerun individual runs.");
+  }
+
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  if (!runSnapshot) {
+    throw new Error("Run not found.");
+  }
+
+  if (!isRunPendingStatus(runSnapshot.status) && runSnapshot.status !== "failed" && runSnapshot.status !== "cancelled") {
+    throw new Error("Only active, failed, or cancelled runs can be rerun.");
+  }
+
+  if (isRunPendingStatus(runSnapshot.status)) {
+    abortRunExecution(batchId, runId, "rerun");
+    await waitForRunExecutionToStop(store, batchId, runId);
+  }
+
+  const latestBatch = store.getBatch(batchId);
+  if (!latestBatch) {
+    return null;
+  }
+
+  const resetRunIds = new Set(getWorkflow(latestBatch.mode).getRerunResetRunIds(latestBatch, runId));
+  if (!resetRunIds.has(runId)) {
+    resetRunIds.add(runId);
+  }
+
+  for (const nextRunId of resetRunIds) {
+    store.updateRun(batchId, nextRunId, (run) => {
+      resetRunForFreshAttempt(run);
+    });
+  }
+
+  refreshBatchLifecycleState(store, batchId);
+  startBatchScheduler(store, batchId);
+  return store.getBatch(batchId);
+}
+
+export async function resumeFailedRun(store: BatchStore, batchId: string, runId: string): Promise<Batch | null> {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
+  }
+
+  if (batch.cancelRequested) {
+    throw new Error("Cancelled batches cannot resume individual runs.");
+  }
+
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  if (!runSnapshot) {
+    throw new Error("Run not found.");
+  }
+
+  if (runSnapshot.status !== "failed") {
+    throw new Error("Only failed runs can be resumed.");
+  }
+
+  const resumed = await resumeRunWithPrompt(store, batch, runSnapshot, buildLifecycleResumePrompt());
+  startBatchScheduler(store, batchId);
+  return resumed;
 }
 
 export async function continueRun(store: BatchStore, batchId: string, runId: string, prompt: string): Promise<Batch | null> {
@@ -1548,7 +1875,13 @@ async function resumeRunWithPrompt(
       void refreshRunReview(store, batchId, runId, worktreePath, baseRef);
       return;
     } catch (error) {
-      const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested;
+      const abortReason = execution.runAbortReasons.get(runId);
+      const cancelled = isAbortError(error) || store.getMutableBatch(batchId)?.cancelRequested || Boolean(abortReason);
+      const cancelMessage = abortReason === "stop"
+        ? "Run stopped."
+        : abortReason === "rerun"
+          ? "Run stopped for rerun."
+          : "Batch cancelled.";
 
       store.updateRun(batchId, runId, (run) => {
         const turn = getRunTurn(run, nextTurn.id);
@@ -1559,6 +1892,7 @@ async function resumeRunWithPrompt(
         finalizeStreamedTurn(run, turn, {
           completedMessage: "Follow-up turn completed.",
           cancelled,
+          cancelMessage,
           streamErrorMessage: cancelled ? null : (error as Error).message,
         });
       });
@@ -1589,8 +1923,12 @@ export function cancelBatch(store: BatchStore, batchId: string): Batch | null {
   }
 
   abortBatchExecution(batchId);
-
-  store.updateBatch(batchId, () => {});
+  refreshBatchLifecycleState(store, batchId);
+  if (batch.projectContext) {
+    startBatchScheduler(store, batchId);
+  } else {
+    notifyBatchScheduler(batchId);
+  }
   return store.getBatch(batchId);
 }
 

@@ -9,6 +9,7 @@ const statusLabels: Record<string, string> = {
   preparing: "Preparing",
   waiting_for_codex: "Waiting for Codex",
   running: "Running",
+  blocked: "Blocked",
   completed: "Completed",
   failed: "Failed",
   cancelled: "Cancelled",

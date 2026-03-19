@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide covers local development for Agents Runner. For the product overview and runtime behavior, see [README.md](README.md). For workflow architecture and adding new batch modes, see [WORKFLOWS.md](WORKFLOWS.md). For the native terminal launcher architecture and extension points, see [docs/open-in-terminal.md](docs/open-in-terminal.md).
+This guide covers local development for Agents Runner. For the product overview and runtime behavior, see [README.md](README.md). For workflow architecture and adding new batch modes, see [WORKFLOWS.md](WORKFLOWS.md). For the run state machine and lifecycle actions, see [docs/run-lifecycle.md](docs/run-lifecycle.md). For the native terminal launcher architecture and extension points, see [docs/open-in-terminal.md](docs/open-in-terminal.md).
 
 ## Development Principles
 
@@ -65,6 +65,27 @@ Use [WORKFLOWS.md](WORKFLOWS.md) when you need to:
 - understand the workflow registry and module interfaces
 - add a new batch mode
 - update workflow-specific tests
+
+Use [docs/run-lifecycle.md](docs/run-lifecycle.md) when you need to:
+
+- change batch status derivation
+- change `stop`, `rerun`, or `resume`
+- modify which failed runs should block downstream stages
+- update rerun dependency reset behavior
+
+## Lifecycle Regression Expectations
+
+When changing scheduler or workflow behavior, remember that failed runs in staged workflows do not auto-unblock downstream work. Consult [docs/run-lifecycle.md](docs/run-lifecycle.md) and [WORKFLOWS.md](WORKFLOWS.md) before changing run lifecycle semantics.
+
+Any change to the runner scheduler, workflow readiness, or staged workflow dependencies should keep these checks covered:
+
+- stopping a queued run leaves it cancelled and never launches it
+- stopping an active run aborts it cleanly and frees scheduler capacity
+- rerunning a run resets the old attempt in place
+- resuming a failed run continues on the existing thread
+- ranked and validated blocked-state transitions still behave correctly
+- loader normalization after restart preserves queued blocked downstream runs instead of auto-failing them
+- repeated and generated batches do not enter `blocked`
 
 ## Feature Guides
 

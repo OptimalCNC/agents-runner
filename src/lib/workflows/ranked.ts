@@ -1,8 +1,8 @@
 import { getBundledMcpStatus } from "../codexMcp";
-import { buildRunRecord, cancelQueuedRuns, executeRun, finalizeQueuedRun, getRunCreatedBranchName } from "../runner";
+import { buildRunRecord, finalizeQueuedRun, getRunCreatedBranchName } from "../runner";
 import type { Batch, BatchStore, GenerationTask, ProjectContext, Run } from "../../types";
 import { extractReviewerScoreFromMcp } from "./shared";
-import type { ExecuteRunFn, WorkflowDefinition } from "./types";
+import type { WorkflowDefinition } from "./types";
 
 function escapeXml(value: unknown): string {
   return String(value ?? "")
@@ -149,166 +149,8 @@ function listReviewerRunsForCandidate(batch: Batch, candidateRunId: string): Run
     .sort((left, right) => left.index - right.index);
 }
 
-async function executeReviewerRun(
-  store: BatchStore,
-  batchId: string,
-  runId: string,
-  projectContext: ProjectContext,
-): Promise<void> {
-  const batch = store.getMutableBatch(batchId);
-  if (!batch || batch.cancelRequested) {
-    finalizeQueuedRun(store, batchId, runId, "cancelled", "Batch cancelled before review start.");
-    return;
-  }
-
-  const reviewRun = batch.runs.find((entry) => entry.id === runId);
-  if (!reviewRun || reviewRun.kind !== "reviewer" || reviewRun.status !== "queued") {
-    return;
-  }
-
-  const reviewedRun = batch.runs.find((entry) => entry.id === reviewRun.reviewedRunId);
-  if (!reviewedRun) {
-    finalizeQueuedRun(store, batchId, runId, "failed", "Reviewed run is unavailable.");
-    return;
-  }
-
-  const reviewedWorkingDirectory = reviewedRun.workingDirectory || reviewedRun.worktreePath || null;
-  const prompt = buildReviewPrompt(batch);
-
-  store.updateRun(batchId, runId, (run) => {
-    run.prompt = prompt;
-    const turn = run.turns[0];
-    if (turn && turn.status === "queued") {
-      turn.prompt = prompt;
-    }
-  });
-
-  if (!reviewedWorkingDirectory) {
-    finalizeQueuedRun(store, batchId, runId, "failed", "Reviewed run workspace is unavailable.");
-    return;
-  }
-
-  await executeRun(store, batchId, runId, projectContext, {
-    sandboxModeOverride: "read-only",
-    workingDirectoryOverride: reviewedWorkingDirectory,
-    promptOverride: prompt,
-    developerInstructions: buildReviewerDeveloperInstructions(batch, reviewedRun, String(reviewRun.reviewedRunId ?? "")),
-  });
-}
-
-function getRankedExecutionConcurrency(batch: Batch): number {
-  return Math.max(
-    1,
-    Math.min(batch.config.concurrency, batch.config.runCount * Math.max(1, batch.config.reviewCount)),
-  );
-}
-
-interface RankedScheduledTask {
-  kind: "candidate" | "reviewer";
-  runId: string;
-}
-
-async function executeRankedBatch(
-  store: BatchStore,
-  batchId: string,
-  projectContext: ProjectContext,
-  candidateRuns: Run[],
-): Promise<void> {
-  const rankedBatch = store.getBatch(batchId)!;
-  const reviewTaskEntries = candidateRuns.flatMap((candidateRun) => buildReviewTasks(rankedBatch, candidateRun));
-
-  for (const [index, task] of reviewTaskEntries.entries()) {
-    const run = buildRunRecord(task, candidateRuns.length + index, "reviewer", task.reviewedRunId);
-    store.appendRun(batchId, run);
-  }
-
-  const readyQueue: RankedScheduledTask[] = candidateRuns.map((run) => ({
-    kind: "candidate",
-    runId: run.id,
-  }));
-  const enqueuedReviewerRunIds = new Set<string>();
-  const activeTasks = new Set<Promise<void>>();
-  const concurrency = getRankedExecutionConcurrency(store.getBatch(batchId)!);
-
-  function enqueueReviewerRuns(candidateRunId: string): void {
-    const currentBatch = store.getBatch(batchId);
-    if (!currentBatch || currentBatch.mode !== "ranked" || currentBatch.cancelRequested) {
-      return;
-    }
-
-    const nextReviewerTasks: RankedScheduledTask[] = [];
-    for (const reviewerRun of listReviewerRunsForCandidate(currentBatch, candidateRunId)) {
-      if (reviewerRun.status !== "queued" || enqueuedReviewerRunIds.has(reviewerRun.id)) {
-        continue;
-      }
-
-      nextReviewerTasks.push({
-        kind: "reviewer",
-        runId: reviewerRun.id,
-      });
-      enqueuedReviewerRunIds.add(reviewerRun.id);
-    }
-
-    if (nextReviewerTasks.length > 0) {
-      readyQueue.unshift(...nextReviewerTasks);
-    }
-  }
-
-  function launchTask(task: RankedScheduledTask): void {
-    const promise = (async () => {
-      if (task.kind === "candidate") {
-        const mutableBatch = store.getMutableBatch(batchId);
-        if (!mutableBatch || mutableBatch.cancelRequested) {
-          finalizeQueuedRun(store, batchId, task.runId, "cancelled", "Batch cancelled before start.");
-          return;
-        }
-
-        await executeRun(store, batchId, task.runId, projectContext, {
-          autoCreateBranch: true,
-        });
-        enqueueReviewerRuns(task.runId);
-        return;
-      }
-
-      await executeReviewerRun(store, batchId, task.runId, projectContext);
-    })().finally(() => {
-      activeTasks.delete(promise);
-    });
-
-    activeTasks.add(promise);
-  }
-
-  while (readyQueue.length > 0 || activeTasks.size > 0) {
-    const mutableBatch = store.getMutableBatch(batchId);
-    if (mutableBatch?.cancelRequested && readyQueue.length > 0) {
-      while (readyQueue.length > 0) {
-        const task = readyQueue.shift()!;
-        finalizeQueuedRun(
-          store,
-          batchId,
-          task.runId,
-          "cancelled",
-          task.kind === "reviewer" ? "Batch cancelled before review start." : "Batch cancelled before start.",
-        );
-      }
-    }
-
-    while (readyQueue.length > 0 && activeTasks.size < concurrency && !store.getMutableBatch(batchId)?.cancelRequested) {
-      launchTask(readyQueue.shift()!);
-    }
-
-    if (activeTasks.size === 0) {
-      break;
-    }
-
-    await Promise.race(activeTasks);
-  }
-
-  if (store.getMutableBatch(batchId)?.cancelRequested) {
-    cancelQueuedRuns(store, batchId, "Batch cancelled before start.");
-  }
-
-  recomputeRankedScores(store, batchId);
+function getReviewedRun(batch: Batch, reviewRun: Run): Run | null {
+  return batch.runs.find((entry) => entry.id === reviewRun.reviewedRunId) ?? null;
 }
 
 export const rankedWorkflow: WorkflowDefinition = {
@@ -344,13 +186,94 @@ export const rankedWorkflow: WorkflowDefinition = {
     }));
   },
 
-  async executeBatchRuns(
+  async createAdditionalRuns(
     store: BatchStore,
     batchId: string,
     projectContext: ProjectContext,
     candidateRuns: Run[],
-  ): Promise<void> {
-    await executeRankedBatch(store, batchId, projectContext, candidateRuns);
+  ): Promise<Run[]> {
+    const batch = store.getBatch(batchId)!;
+    return candidateRuns.flatMap((candidateRun) =>
+      buildReviewTasks(batch, candidateRun).map((task, index) =>
+        buildRunRecord(task, candidateRuns.length + (candidateRun.index * batch.config.reviewCount) + index, "reviewer", task.reviewedRunId),
+      )
+    );
+  },
+
+  reconcileLifecycle(store: BatchStore, batchId: string) {
+    const batch = store.getBatch(batchId);
+    if (!batch || batch.mode !== "ranked") {
+      return;
+    }
+
+    for (const reviewerRun of batch.runs.filter((run) => run.kind === "reviewer" && run.status === "queued")) {
+      const reviewedRun = getReviewedRun(batch, reviewerRun);
+      if (!reviewedRun) {
+        finalizeQueuedRun(store, batchId, reviewerRun.id, "failed", "Reviewed run is unavailable.");
+        continue;
+      }
+
+      if (reviewedRun.status === "cancelled") {
+        finalizeQueuedRun(store, batchId, reviewerRun.id, "cancelled", "Review skipped because the candidate run was stopped.");
+      }
+    }
+
+    recomputeRankedScores(store, batchId);
+  },
+
+  isRunReady(batch, run) {
+    if (run.kind !== "reviewer") {
+      return true;
+    }
+
+    const reviewedRun = getReviewedRun(batch, run);
+    if (!reviewedRun || reviewedRun.status !== "completed") {
+      return false;
+    }
+
+    return Boolean(reviewedRun.workingDirectory || reviewedRun.worktreePath);
+  },
+
+  getRunExecutionOptions(batch, run) {
+    if (run.kind !== "reviewer") {
+      return { autoCreateBranch: true };
+    }
+
+    const reviewedRun = getReviewedRun(batch, run);
+    if (!reviewedRun) {
+      throw new Error("Reviewed run is unavailable.");
+    }
+
+    const reviewedWorkingDirectory = reviewedRun.workingDirectory || reviewedRun.worktreePath || "";
+    if (!reviewedWorkingDirectory) {
+      throw new Error("Reviewed run workspace is unavailable.");
+    }
+
+    return {
+      sandboxModeOverride: "read-only",
+      workingDirectoryOverride: reviewedWorkingDirectory,
+      promptOverride: buildReviewPrompt(batch),
+      developerInstructions: buildReviewerDeveloperInstructions(batch, reviewedRun, String(run.reviewedRunId ?? "")),
+    };
+  },
+
+  getBlockingRunIds(batch) {
+    return batch.runs
+      .filter((run) => run.status === "failed" && (run.kind !== "reviewer" || Boolean(run.reviewedRunId)))
+      .map((run) => run.id);
+  },
+
+  getRerunResetRunIds(batch, runId) {
+    const run = batch.runs.find((entry) => entry.id === runId);
+    if (!run) {
+      return [];
+    }
+
+    if (run.kind === "reviewer") {
+      return [runId];
+    }
+
+    return [runId, ...listReviewerRunsForCandidate(batch, runId).map((entry) => entry.id)];
   },
 
   onScoreSubmitted(store: BatchStore, batchId: string) {

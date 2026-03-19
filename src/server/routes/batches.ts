@@ -7,6 +7,9 @@ import {
   previewBatchDelete,
   reopenRunFollowUps,
   requestRunCommitFollowUp,
+  rerunRun,
+  resumeFailedRun,
+  stopRun,
 } from "../../lib/runner";
 import { readBody, sendError, sendJson, type ApiRouteHandler } from "../http";
 import {
@@ -134,6 +137,69 @@ export const handleBatchRoutes: ApiRouteHandler = async (context, request, respo
       sendJson(response, 202, { batch });
     } catch (error) {
       sendError(response, 409, (error as Error).message || "Failed to continue run.");
+    }
+    return true;
+  }
+
+  const stopRunMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/runs\/([^/]+)\/stop$/);
+  if (request.method === "POST" && stopRunMatch) {
+    try {
+      const batch = await stopRun(
+        context.store,
+        decodeURIComponent(stopRunMatch[1]),
+        decodeURIComponent(stopRunMatch[2]),
+      );
+
+      if (!batch) {
+        sendError(response, 404, "Batch not found.");
+        return true;
+      }
+
+      sendJson(response, 202, { batch });
+    } catch (error) {
+      sendError(response, 409, (error as Error).message || "Failed to stop run.");
+    }
+    return true;
+  }
+
+  const rerunRunMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/runs\/([^/]+)\/rerun$/);
+  if (request.method === "POST" && rerunRunMatch) {
+    try {
+      const batch = await rerunRun(
+        context.store,
+        decodeURIComponent(rerunRunMatch[1]),
+        decodeURIComponent(rerunRunMatch[2]),
+      );
+
+      if (!batch) {
+        sendError(response, 404, "Batch not found.");
+        return true;
+      }
+
+      sendJson(response, 202, { batch });
+    } catch (error) {
+      sendError(response, 409, (error as Error).message || "Failed to rerun run.");
+    }
+    return true;
+  }
+
+  const resumeRunMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/runs\/([^/]+)\/resume$/);
+  if (request.method === "POST" && resumeRunMatch) {
+    try {
+      const batch = await resumeFailedRun(
+        context.store,
+        decodeURIComponent(resumeRunMatch[1]),
+        decodeURIComponent(resumeRunMatch[2]),
+      );
+
+      if (!batch) {
+        sendError(response, 404, "Batch not found.");
+        return true;
+      }
+
+      sendJson(response, 202, { batch });
+    } catch (error) {
+      sendError(response, 409, (error as Error).message || "Failed to resume run.");
     }
     return true;
   }

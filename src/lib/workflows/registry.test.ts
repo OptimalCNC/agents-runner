@@ -10,7 +10,12 @@ const REQUIRED_METHODS = [
   "buildInitialBatchState",
   "getTitleSourcePrompt",
   "createTasks",
-  "executeBatchRuns",
+  "createAdditionalRuns",
+  "reconcileLifecycle",
+  "isRunReady",
+  "getRunExecutionOptions",
+  "getBlockingRunIds",
+  "getRerunResetRunIds",
   "onScoreSubmitted",
   "onBatchSettled",
 ] as const;

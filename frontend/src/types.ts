@@ -1,6 +1,6 @@
 // Frontend-safe type definitions (mirrors src/types.ts without Node.js imports)
 
-export type BatchStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type BatchStatus = "queued" | "running" | "blocked" | "completed" | "failed" | "cancelled";
 export type RunStatus =
   | "queued"
   | "preparing"

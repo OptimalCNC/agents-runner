@@ -5,6 +5,7 @@ import type { ServerResponse } from "node:http";
 export type BatchStatus =
   | "queued"
   | "running"
+  | "blocked"
   | "completed"
   | "failed"
   | "cancelled";

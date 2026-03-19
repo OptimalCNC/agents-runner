@@ -1,13 +1,14 @@
 import { Suspense, lazy } from "react";
 import { useEffect, useState } from "react";
 import type { Run } from "../types.js";
-import { TerminalIcon } from "../icons.js";
-import { apiLaunchTerminal } from "../state/api.js";
+import { PlayIcon, RefreshIcon, TerminalIcon, XIcon } from "../icons.js";
+import { apiLaunchTerminal, apiRerunRun, apiResumeRun, apiStopRun } from "../state/api.js";
 import { useAppStore, selectSelectedBatch } from "../state/store.js";
 import type { RunDetailTab } from "../state/navigation.js";
 import { getWorkflowUI } from "../workflows/registry.js";
 import { detectClientPlatform } from "../utils/clientPlatform.js";
 import { formatDate } from "../utils/format.js";
+import { canRerunRun, canResumeRun, canStopRun } from "../utils/runLifecycle.js";
 import { getRunTerminalPath, resolveTerminalLaunchState } from "../utils/terminalLaunch.js";
 import { StatusPill } from "./StatusPill.js";
 import { SessionPanel } from "./SessionPanel.js";
@@ -52,6 +53,7 @@ export function RunDetail({ run }: Props) {
   const [configsOpen, setConfigsOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [launchingTerminal, setLaunchingTerminal] = useState(false);
+  const [runAction, setRunAction] = useState<"stop" | "rerun" | "resume" | null>(null);
   const selectedBatchId = useAppStore((state) => state.selectedBatchId);
   const selectedBatch = useAppStore(selectSelectedBatch);
   const activePanel = useAppStore((state) => state.activeTab);
@@ -66,6 +68,10 @@ export function RunDetail({ run }: Props) {
       useAppStore.getState().selectTab("session");
     }
   }, [activePanel, showReviewPanel]);
+
+  useEffect(() => {
+    setRunAction(null);
+  }, [run?.id]);
 
   if (!run) {
     return (
@@ -91,6 +97,9 @@ export function RunDetail({ run }: Props) {
   const usageSummary = formatUsageSummary(run);
   const configCount = run.turns.filter((turn) => Boolean(turn.codexConfig)).length;
   const terminalLaunchState = resolveTerminalLaunchState(config, clientPlatform, terminalPath);
+  const canStop = selectedBatch ? canStopRun(selectedBatch, run) : false;
+  const canRerun = selectedBatch ? canRerunRun(selectedBatch, run) : false;
+  const canResume = selectedBatch ? canResumeRun(selectedBatch, run) : false;
   const panels: { key: RunDetailTab; label: string }[] = [
     { key: "session", label: "Session" },
     ...(showReviewPanel ? [{ key: "review", label: "Review" } as const] : []),
@@ -111,6 +120,40 @@ export function RunDetail({ run }: Props) {
       useAppStore.getState().addToast("error", "Failed to open terminal", (error as Error).message);
     } finally {
       setLaunchingTerminal(false);
+    }
+  }
+
+  async function handleRunAction(action: "stop" | "rerun" | "resume"): Promise<void> {
+    if (!selectedBatch || !run) {
+      return;
+    }
+
+    const runId = run.id;
+    setRunAction(action);
+    try {
+      const payload = action === "stop"
+        ? await apiStopRun(selectedBatch.id, runId)
+        : action === "rerun"
+          ? await apiRerunRun(selectedBatch.id, runId)
+          : await apiResumeRun(selectedBatch.id, runId);
+      useAppStore.getState().setBatchDetail(payload.batch);
+      useAppStore.getState().addToast(
+        "success",
+        action === "stop" ? "Run stopped" : action === "rerun" ? "Run restarted" : "Run resumed",
+        action === "stop"
+          ? "The run was stopped and workflow scheduling was re-evaluated."
+          : action === "rerun"
+            ? "A fresh run attempt has been queued."
+            : "The failed run resumed from the same thread.",
+      );
+    } catch (error) {
+      useAppStore.getState().addToast(
+        "error",
+        action === "stop" ? "Stop failed" : action === "rerun" ? "Rerun failed" : "Resume failed",
+        (error as Error).message,
+      );
+    } finally {
+      setRunAction(null);
     }
   }
 
@@ -146,10 +189,43 @@ export function RunDetail({ run }: Props) {
           </div>
         </div>
         <div className="run-detail-header-actions">
+          {canResume && (
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              disabled={runAction !== null}
+              onClick={() => void handleRunAction("resume")}
+            >
+              <PlayIcon size={12} />
+              {runAction === "resume" ? "Resuming..." : "Resume"}
+            </button>
+          )}
+          {canRerun && (
+            <button
+              className="btn btn-ghost btn-sm"
+              type="button"
+              disabled={runAction !== null}
+              onClick={() => void handleRunAction("rerun")}
+            >
+              <RefreshIcon size={12} />
+              {runAction === "rerun" ? "Rerunning..." : "Rerun"}
+            </button>
+          )}
+          {canStop && (
+            <button
+              className="btn btn-danger btn-sm"
+              type="button"
+              disabled={runAction !== null}
+              onClick={() => void handleRunAction("stop")}
+            >
+              <XIcon size={12} />
+              {runAction === "stop" ? "Stopping..." : "Stop"}
+            </button>
+          )}
           <button
             className="btn btn-primary btn-sm"
             type="button"
-            disabled={!terminalLaunchState.canLaunch || launchingTerminal}
+            disabled={!terminalLaunchState.canLaunch || launchingTerminal || runAction !== null}
             title={terminalLaunchState.canLaunch ? `Open in ${terminalLaunchState.effectiveLauncherLabel}` : terminalLaunchState.disabledReason}
             onClick={() => void handleOpenTerminal()}
           >

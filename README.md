@@ -46,6 +46,22 @@ Agents Runner uses the Codex SDK, which needs credentials to talk to a model pro
 3. **Start** &mdash; the app creates isolated git worktrees and launches runs in parallel. Progress streams back in real time.
 4. **Review and continue** &mdash; inspect each run in the coding-agent workspace, including session activity, streamed activity, git changes, and logs. Workflows that permit follow-ups can continue the same Codex thread with new messages.
 
+## Run Lifecycle
+
+Individual runs can now be resolved without cancelling the whole batch:
+
+- **Stop** &mdash; explicitly stop one queued or active run. In staged workflows, stopping a failed blocking run also resolves the blocker so later stages can proceed.
+- **Rerun** &mdash; restart one run from scratch with the same run settings. This replaces the previous attempt on the same run card.
+- **Resume** &mdash; continue a failed run on the same Codex thread and working directory. This is different from a normal follow-up turn: resume is for recovery after a failed run, while follow-ups are extra turns on a settled run.
+
+Batch status now includes **Blocked**:
+
+- **Blocked** means downstream workflow progress is waiting on user action for one or more failed prerequisite runs.
+- Failed runs in staged workflows do **not** automatically unblock later stages.
+- `repeated` and `generated` batches do not use `blocked`; their failed runs simply remain failed until the user reruns or resumes them.
+
+For the full state machine and workflow-specific rules, see [docs/run-lifecycle.md](docs/run-lifecycle.md).
+
 ## Configuration
 
 | Setting             | Description                                                              |
@@ -75,3 +91,4 @@ data/batches/<batchId>/runs/<runId>.json # Individual run data
 - If you select a subdirectory rather than the repo root, each run still gets a full worktree but runs from the matching subdirectory within it.
 - Worktree folders are named `<project>-<branch>-<batch-id>-<run-index>` (e.g. `my-app-main-batch-42-3`).
 - You can cancel a running batch at any time; runs that have already completed keep their results.
+- In ranked and validated workflows, a failed prerequisite run blocks later stages until you explicitly stop, rerun, or resume it.

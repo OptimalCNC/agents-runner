@@ -115,7 +115,7 @@ test("collectValidatorDirectories dedupes worker worktree roots", () => {
   ]);
 });
 
-test("validated workflow launches validator after workers finish with expected overrides", async () => {
+test("validated workflow creates a validator run after workers", async () => {
   const batch = buildMockBatch({
     mode: "validated",
     prompt: "Implement the task.",
@@ -123,146 +123,115 @@ test("validated workflow launches validator after workers finish with expected o
     runCount: 2,
   });
   const workerA = buildMockRun({ id: "run-1", index: 0, kind: "candidate", status: "queued" });
-  workerA.title = "Worker 1";
   const workerB = buildMockRun({ id: "run-2", index: 1, kind: "candidate", status: "queued" });
-  workerB.title = "Worker 2";
-  batch.runs = [workerA, workerB];
   const store = buildMockStore(batch);
-  const calls: Array<{
-    runId: string;
-    options?: {
-      promptOverride?: string;
-      sandboxModeOverride?: string;
-      workingDirectoryOverride?: string;
-      additionalDirectoriesOverride?: string[];
-      autoCreateBranch?: boolean;
-      developerInstructions?: string;
-    };
-  }> = [];
 
-  await wf.executeBatchRuns(store, batch.id, batch.projectContext!, [workerA, workerB], async (_store, currentBatchId, runId, _projectContext, options) => {
-    calls.push({ runId, options });
-    store.updateRun(currentBatchId, runId, (run) => {
-      run.status = "completed";
-      run.worktreePath = `/repo/worktrees/${runId}`;
-      run.workingDirectory = `/repo/worktrees/${runId}/project`;
-      run.finalResponse = `response for ${runId}`;
-      run.error = null;
-      run.turns[0].status = "completed";
-      run.turns[0].completedAt = "2026-01-01T00:00:05.000Z";
-      run.turns[0].finalResponse = run.finalResponse;
-      run.turns[0].items = [{
-        id: `item-${runId}`,
-        type: "mcp_tool_call",
-        server: "agents-runner-workflow",
-        tool: "submit_result",
-        status: "completed",
-        result: {
-          structured_content: {
-            workingFolder: `/repo/worktrees/${runId}`,
-            runId,
-            files: [
-              {
-                path: `project/src/${runId}.ts`,
-                explanation: `Final implementation for ${runId}.`,
-              },
-            ],
-          },
-        },
-      }];
-    });
+  const [validatorRun] = await wf.createAdditionalRuns(store, batch.id, batch.projectContext!, [workerA, workerB]);
+
+  expect(validatorRun?.kind).toBe("validator");
+  expect(validatorRun?.title).toBe("Validator");
+  expect(validatorRun?.prompt).toBe("Validate everything.");
+});
+
+test("validated workflow builds validator execution options from worker outputs", () => {
+  const batch = buildMockBatch({
+    mode: "validated",
+    prompt: "Implement the task.",
+    reviewPrompt: "Validate everything.",
+    runCount: 2,
   });
+  const workerA = buildMockRun({ id: "run-1", index: 0, kind: "candidate", status: "completed" });
+  workerA.title = "Worker 1";
+  workerA.worktreePath = "/repo/worktrees/run-1";
+  workerA.workingDirectory = "/repo/worktrees/run-1/project";
+  workerA.finalResponse = "response for run-1";
+  workerA.turns[0].status = "completed";
+  workerA.turns[0].items = [{
+    id: "item-run-1",
+    type: "mcp_tool_call",
+    server: "agents-runner-workflow",
+    tool: "submit_result",
+    status: "completed",
+    result: {
+      structured_content: {
+        workingFolder: "/repo/worktrees/run-1",
+        runId: "run-1",
+        files: [{ path: "project/src/run-1.ts", explanation: "Final implementation for run-1." }],
+      },
+    },
+  }];
+  const workerB = buildMockRun({ id: "run-2", index: 1, kind: "candidate", status: "completed" });
+  workerB.title = "Worker 2";
+  workerB.worktreePath = "/repo/worktrees/run-2";
+  workerB.workingDirectory = "/repo/worktrees/run-2/project";
+  workerB.finalResponse = "response for run-2";
+  workerB.turns[0].status = "completed";
+  workerB.turns[0].items = [{
+    id: "item-run-2",
+    type: "mcp_tool_call",
+    server: "agents-runner-workflow",
+    tool: "submit_result",
+    status: "completed",
+    result: {
+      structured_content: {
+        workingFolder: "/repo/worktrees/run-2",
+        runId: "run-2",
+        files: [{ path: "project/src/run-2.ts", explanation: "Final implementation for run-2." }],
+      },
+    },
+  }];
+  const validator = buildMockRun({ id: "run-3", index: 2, kind: "validator", status: "queued" });
+  batch.runs = [workerA, workerB, validator];
 
-  expect(calls).toHaveLength(3);
-  expect(calls[0]?.runId).toBe("run-1");
-  expect(calls[1]?.runId).toBe("run-2");
-  expect(calls[0]?.options?.developerInstructions).toBe(
-    "Submit your final results exactly once with `agents-runner-workflow.submit_result`. These submitted results will be validated by a validator, which validates the results rather than the implementation code.",
-  );
-  expect(calls[1]?.options?.developerInstructions).toBe(
-    "Submit your final results exactly once with `agents-runner-workflow.submit_result`. These submitted results will be validated by a validator, which validates the results rather than the implementation code.",
-  );
-  expect(calls[2]?.options?.sandboxModeOverride).toBe("read-only");
-  expect(calls[2]?.options?.workingDirectoryOverride).toBe("/repo/project");
-  expect(calls[2]?.options?.developerInstructions).toBeUndefined();
-  expect(calls[2]?.options?.additionalDirectoriesOverride).toEqual([
+  const options = wf.getRunExecutionOptions(batch, validator, batch.projectContext!);
+
+  expect(options.sandboxModeOverride).toBe("read-only");
+  expect(options.workingDirectoryOverride).toBe("/repo/project");
+  expect(options.additionalDirectoriesOverride).toEqual([
     "/repo/worktrees/run-1",
     "/repo/worktrees/run-2",
   ]);
-  expect(calls[2]?.options?.promptOverride).toContain("```xml");
-  expect(calls[2]?.options?.promptOverride).toContain("<workers>");
-  expect(calls[2]?.options?.promptOverride).toContain(`<worker id="run-1" title="Worker 1" status="completed">`);
-  expect(calls[2]?.options?.promptOverride).toContain('<submittedFiles status="submitted">');
-  expect(calls[2]?.options?.promptOverride).toContain('<file path="/repo/worktrees/run-1/project/src/run-1.ts">');
-  expect(calls[2]?.options?.promptOverride).toContain("response for run-1");
-  expect(calls[2]?.options?.promptOverride).toContain("response for run-2");
-  expect(calls[2]?.options?.promptOverride).toContain("Original Tasks:");
-
-  const updatedBatch = store.getBatch(batch.id)!;
-  expect(updatedBatch.runs.find((run) => run.kind === "validator")?.title).toBe("Validator");
+  expect(options.promptOverride).toContain("```xml");
+  expect(options.promptOverride).toContain("<workers>");
+  expect(options.promptOverride).toContain(`<worker id="run-1" title="Worker 1" status="completed">`);
+  expect(options.promptOverride).toContain('<submittedFiles status="submitted">');
+  expect(options.promptOverride).toContain('<file path="/repo/worktrees/run-1/project/src/run-1.ts">');
+  expect(options.promptOverride).toContain("response for run-1");
+  expect(options.promptOverride).toContain("response for run-2");
+  expect(options.promptOverride).toContain("Original Tasks:");
 });
 
-test("validated workflow fails completed workers that do not submit exactly one result", async () => {
+test("validated workflow fails completed workers that do not submit exactly one result", () => {
   const batch = buildMockBatch({
     mode: "validated",
     prompt: "Implement the task.",
     reviewPrompt: "Validate everything.",
     runCount: 1,
   });
-  const worker = buildMockRun({ id: "run-1", index: 0, kind: "candidate", status: "queued" });
+  const worker = buildMockRun({ id: "run-1", index: 0, kind: "candidate", status: "completed" });
   worker.title = "Worker 1";
   batch.runs = [worker];
   const store = buildMockStore(batch);
 
-  await wf.executeBatchRuns(store, batch.id, batch.projectContext!, [worker], async (_store, currentBatchId, runId) => {
-    store.updateRun(currentBatchId, runId, (run) => {
-      run.status = "completed";
-      run.worktreePath = `/repo/worktrees/${runId}`;
-      run.workingDirectory = `/repo/worktrees/${runId}/project`;
-      run.finalResponse = "done";
-      run.turns[0].status = "completed";
-      run.turns[0].completedAt = "2026-01-01T00:00:05.000Z";
-      run.turns[0].finalResponse = "done";
-      run.turns[0].items = [];
-    });
-  });
+  wf.reconcileLifecycle(store, batch.id);
 
   const updatedWorker = store.getBatch(batch.id)!.runs.find((run) => run.id === "run-1");
   expect(updatedWorker?.status).toBe("failed");
   expect(updatedWorker?.error).toContain("submit_result");
-
-  const validator = store.getBatch(batch.id)!.runs.find((run) => run.kind === "validator");
-  expect(validator?.prompt).toContain('<submittedFiles status="missing">');
 });
 
-test("validated workflow cancels queued validator when batch is cancelled before validation", async () => {
+test("validated workflow blocks validator until workers are resolved", () => {
   const batch = buildMockBatch({
     mode: "validated",
     prompt: "Implement the task.",
     reviewPrompt: "Validate everything.",
     runCount: 1,
   });
-  const worker = buildMockRun({ id: "run-1", index: 0, kind: "candidate", status: "queued" });
-  worker.title = "Worker 1";
-  batch.runs = [worker];
-  const store = buildMockStore(batch);
-  let executeCount = 0;
+  const worker = buildMockRun({ id: "run-1", index: 0, kind: "candidate", status: "failed" });
+  const validator = buildMockRun({ id: "run-2", index: 1, kind: "validator", status: "queued" });
+  batch.runs = [worker, validator];
 
-  await wf.executeBatchRuns(store, batch.id, batch.projectContext!, [worker], async (_store, currentBatchId, runId) => {
-    executeCount += 1;
-    store.updateRun(currentBatchId, runId, (run) => {
-      run.status = "completed";
-      run.worktreePath = `/repo/worktrees/${runId}`;
-      run.workingDirectory = `/repo/worktrees/${runId}/project`;
-      run.turns[0].status = "completed";
-    });
-    store.updateBatch(currentBatchId, (mutableBatch) => {
-      mutableBatch.cancelRequested = true;
-    });
-  });
-
-  expect(executeCount).toBe(1);
-  const validator = store.getBatch(batch.id)!.runs.find((run) => run.kind === "validator");
-  expect(validator?.status).toBe("cancelled");
-  expect(validator?.error).toBe("Batch cancelled before validation start.");
+  expect(wf.isRunReady(batch, validator)).toBe(false);
+  expect(wf.getBlockingRunIds(batch)).toEqual(["run-1"]);
+  expect(wf.getRerunResetRunIds(batch, "run-1")).toEqual(["run-1", "run-2"]);
 });

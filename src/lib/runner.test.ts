@@ -2,10 +2,14 @@ import { expect, test } from "bun:test";
 
 import {
   buildCodexTurnConfig,
+  cancelBatch,
   continueRun,
   createRunId,
   executeRun,
   reopenRunFollowUps,
+  rerunRun,
+  resumeFailedRun,
+  stopRun,
   setCodexClientFactoryForTests,
   requestRunCommitFollowUp,
 } from "./runner";
@@ -95,6 +99,45 @@ function installStreamingMockCodexClient(options: {
   }));
 }
 
+function installAbortableResumeMockCodexClient(onResume?: (threadId: string, prompt: string) => void): void {
+  setCodexClientFactoryForTests(() => ({
+    startThread() {
+      return {
+        async run() {
+          return { finalResponse: "{\"tasks\":[]}" };
+        },
+        async runStreamed() {
+          return { events: emptyEvents() };
+        },
+      };
+    },
+    resumeThread(threadId: string) {
+      return {
+        async run() {
+          return { finalResponse: "" };
+        },
+        async runStreamed(prompt: string, options?: { signal?: AbortSignal }) {
+          onResume?.(threadId, prompt);
+
+          return {
+            events: (async function* generateEvents(): AsyncIterable<unknown> {
+              await new Promise<never>((_, reject) => {
+                const abort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+                if (options?.signal?.aborted) {
+                  abort();
+                  return;
+                }
+
+                options?.signal?.addEventListener("abort", abort, { once: true });
+              });
+            })(),
+          };
+        },
+      };
+    },
+  }));
+}
+
 async function waitFor<T>(getValue: () => T | null, timeoutMs: number = 2_000): Promise<T> {
   const startedAt = Date.now();
 
@@ -153,6 +196,18 @@ function buildResumableRun(overrides: Partial<Run> = {}): Run {
     output_tokens: 5,
   };
   return { ...run, ...overrides };
+}
+
+function buildReview(currentBranch: string | null): NonNullable<Run["review"]> {
+  return {
+    currentBranch,
+    headSha: "abc123",
+    comparisonBaseRef: "main",
+    statusShort: "M  src/index.ts",
+    diffStat: "1 file changed, 1 insertion(+)",
+    trackedDiff: "diff --git a/src/index.ts b/src/index.ts",
+    untrackedFiles: [],
+  };
 }
 
 test("createRunId returns a stable run id derived from the run index", () => {
@@ -479,6 +534,220 @@ test("continueRun resumes reopened validator runs", async () => {
       "/repo/worktrees/worker-1",
       "/repo/worktrees/worker-2",
     ]);
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("stopRun cancels queued runs without starting them", async () => {
+  const batch = buildMockBatch({ mode: "repeated" });
+  batch.id = "batch-stop-queued";
+  batch.status = "running";
+  const run = buildMockRun({ id: "run-1", status: "queued" });
+  batch.runs = [run];
+  const store = buildMockStore(batch);
+
+  const updated = await stopRun(store, batch.id, run.id);
+  const stoppedRun = updated?.runs[0];
+
+  expect(updated?.status).toBe("completed");
+  expect(stoppedRun?.status).toBe("cancelled");
+  expect(stoppedRun?.error).toBe("Run stopped before start.");
+  expect(stoppedRun?.turns[0]?.status).toBe("cancelled");
+  expect(stoppedRun?.turns[0]?.completedAt).toBeTruthy();
+});
+
+test("stopRun converts failed ranked blockers to cancelled and unblocks reviewer stages", async () => {
+  const batch = buildMockBatch({ mode: "ranked", reviewCount: 1 });
+  batch.id = "batch-stop-blocker";
+  batch.status = "blocked";
+  const candidate = buildResumableRun({
+    id: "run-1",
+    kind: "candidate",
+    status: "failed",
+    error: "Candidate stalled.",
+    finalResponse: "",
+    turns: [buildCompletedTurn({ status: "failed", error: "Candidate stalled.", finalResponse: "" })],
+  });
+  candidate.review = buildReview("batch-stop-blocker/run-1");
+  const reviewer = buildMockRun({
+    id: "review-1",
+    index: 1,
+    kind: "reviewer",
+    reviewedRunId: "run-1",
+    status: "queued",
+  });
+  batch.runs = [candidate, reviewer];
+  const store = buildMockStore(batch);
+
+  const updated = await stopRun(store, batch.id, candidate.id);
+  const stoppedCandidate = updated?.runs.find((run) => run.id === candidate.id);
+  const cancelledReviewer = updated?.runs.find((run) => run.id === reviewer.id);
+
+  expect(updated?.status).toBe("completed");
+  expect(stoppedCandidate?.status).toBe("cancelled");
+  expect(stoppedCandidate?.turns.at(-1)?.error).toBe("Run stopped.");
+  expect(cancelledReviewer?.status).toBe("cancelled");
+  expect(cancelledReviewer?.error).toBe("Review skipped because the candidate run was stopped.");
+});
+
+test("stopRun aborts active resumed runs and marks them cancelled", async () => {
+  installAbortableResumeMockCodexClient();
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    batch.id = "batch-stop-active";
+    batch.status = "failed";
+    const run = buildResumableRun({
+      id: "run-1",
+      status: "failed",
+      error: "Run stalled.",
+      finalResponse: "",
+      turns: [buildCompletedTurn({ status: "failed", error: "Run stalled.", finalResponse: "" })],
+    });
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await resumeFailedRun(store, batch.id, run.id);
+    await waitFor(() => {
+      const current = store.getBatch(batch.id)?.runs[0];
+      return current && (current.status === "waiting_for_codex" || current.status === "running") ? current : null;
+    });
+
+    const updated = await stopRun(store, batch.id, run.id);
+    const stoppedRun = updated?.runs[0];
+
+    expect(updated?.status).toBe("completed");
+    expect(stoppedRun?.status).toBe("cancelled");
+    expect(stoppedRun?.turns.at(-1)?.status).toBe("cancelled");
+    expect(stoppedRun?.turns.at(-1)?.error).toBe("Run stopped.");
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("rerunRun resets failed ranked candidates and their reviewers to a fresh attempt", async () => {
+  const batch = buildMockBatch({ mode: "ranked", reviewCount: 1 });
+  batch.id = "batch-rerun-ranked";
+  batch.status = "blocked";
+  batch.config.concurrency = 0;
+
+  const candidate = buildResumableRun({
+    id: "run-1",
+    kind: "candidate",
+    status: "failed",
+    error: "Candidate failed.",
+    finalResponse: "partial output",
+    turns: [buildCompletedTurn({ status: "failed", error: "Candidate failed.", finalResponse: "partial output" })],
+  });
+  candidate.logs = [{ id: "log-1", at: "2026-01-01T00:00:00.000Z", level: "error", message: "Candidate failed." }];
+  candidate.items = [{ id: "item-1", type: "agent_message", text: "partial output" }];
+  candidate.review = buildReview("batch-rerun-ranked/run-1");
+
+  const reviewer = buildResumableRun({
+    id: "review-1",
+    index: 1,
+    kind: "reviewer",
+    reviewedRunId: "run-1",
+    status: "completed",
+    finalResponse: "Score: 88",
+  });
+  reviewer.score = 88;
+  reviewer.rank = 1;
+  reviewer.review = buildReview("batch-rerun-ranked/review-1");
+
+  batch.runs = [candidate, reviewer];
+  const store = buildMockStore(batch);
+
+  try {
+    const updated = await rerunRun(store, batch.id, candidate.id);
+    const rerunCandidate = updated?.runs.find((run) => run.id === candidate.id);
+    const resetReviewer = updated?.runs.find((run) => run.id === reviewer.id);
+
+    expect(updated?.status).toBe("running");
+    expect(rerunCandidate?.status).toBe("queued");
+    expect(rerunCandidate?.threadId).toBeNull();
+    expect(rerunCandidate?.workingDirectory).toBeNull();
+    expect(rerunCandidate?.finalResponse).toBe("");
+    expect(rerunCandidate?.error).toBeNull();
+    expect(rerunCandidate?.logs).toEqual([]);
+    expect(rerunCandidate?.review).toBeNull();
+    expect(rerunCandidate?.turns).toHaveLength(1);
+    expect(rerunCandidate?.turns[0]?.status).toBe("queued");
+
+    expect(resetReviewer?.status).toBe("queued");
+    expect(resetReviewer?.threadId).toBeNull();
+    expect(resetReviewer?.review).toBeNull();
+    expect(resetReviewer?.score).toBeNull();
+    expect(resetReviewer?.rank).toBeNull();
+    expect(resetReviewer?.turns).toHaveLength(1);
+    expect(resetReviewer?.turns[0]?.status).toBe("queued");
+  } finally {
+    cancelBatch(store, batch.id);
+  }
+});
+
+test("resumeFailedRun appends a resume turn on the existing thread", async () => {
+  let resumedThreadId: string | null = null;
+  let resumedPrompt: string | null = null;
+
+  setCodexClientFactoryForTests(() => ({
+    startThread() {
+      return {
+        async run() {
+          return { finalResponse: "{\"tasks\":[]}" };
+        },
+        async runStreamed() {
+          return { events: emptyEvents() };
+        },
+      };
+    },
+    resumeThread(threadId: string) {
+      resumedThreadId = threadId;
+      return {
+        async run() {
+          return { finalResponse: "" };
+        },
+        async runStreamed(prompt: string) {
+          resumedPrompt = prompt;
+          return {
+            events: streamEvents([
+              { type: "turn.started" },
+              { type: "item.completed", item: { id: "item-1", type: "agent_message", text: "Recovered." } },
+              { type: "turn.completed", usage: { input_tokens: 9, output_tokens: 4 } },
+            ]),
+          };
+        },
+      };
+    },
+  }));
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    batch.id = "batch-resume-failed";
+    batch.status = "failed";
+    const run = buildResumableRun({
+      id: "run-1",
+      status: "failed",
+      error: "Previous turn failed.",
+      finalResponse: "",
+      turns: [buildCompletedTurn({ status: "failed", error: "Previous turn failed.", finalResponse: "" })],
+    });
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await resumeFailedRun(store, batch.id, run.id);
+    const resumedRun = await waitFor(() => {
+      const current = store.getBatch(batch.id)?.runs[0];
+      return current?.status === "completed" ? current : null;
+    });
+
+    expect(String(resumedThreadId)).toBe("thread-1");
+    expect(resumedPrompt ?? "").toContain("Continue from where you left off.");
+    expect(resumedRun.threadId).toBe("thread-1");
+    expect(resumedRun.turns).toHaveLength(2);
+    expect(resumedRun.turns[1]?.codexConfig?.launchMode).toBe("resume");
+    expect(resumedRun.turns[1]?.prompt).toContain("Continue from where you left off.");
+    expect(resumedRun.turns[1]?.status).toBe("completed");
   } finally {
     resetMockCodexClient();
   }

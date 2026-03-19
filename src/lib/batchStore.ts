@@ -3,7 +3,7 @@ import path from "node:path";
 import type { ServerResponse } from "node:http";
 
 import { hasStrongLatestTurnCompletionEvidence, isTransientStreamWarningMessage } from "./runCompletion";
-import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
+import { isRunActiveStatus, isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 import { getWorkflow } from "./workflows/registry";
 import { extractReviewerScoreFromMcp, normalizeMode } from "./workflows/shared";
 
@@ -126,28 +126,47 @@ function syncRunDerivedState(run: Run): void {
   }
 }
 
+function getReadyQueuedRunIds(batch: Batch): string[] {
+  if (batch.cancelRequested) {
+    return [];
+  }
+
+  const workflow = getWorkflow(batch.mode);
+  return batch.runs
+    .filter((run) => run.status === "queued" && workflow.isRunReady(batch, run))
+    .map((run) => run.id);
+}
+
 function deriveBatchStatus(batch: Batch): BatchStatus {
-  if (batch.cancelRequested && batch.runs.every((run) => isRunTerminalStatus(run.status))) {
-    return "cancelled";
+  if (batch.cancelRequested) {
+    return batch.runs.every((run) => isRunTerminalStatus(run.status)) ? "cancelled" : "running";
+  }
+
+  if (batch.runs.some((run) => isRunActiveStatus(run.status))) {
+    return "running";
+  }
+
+  if (getReadyQueuedRunIds(batch).length > 0) {
+    return "running";
+  }
+
+  if (getWorkflow(batch.mode).getBlockingRunIds(batch).length > 0) {
+    return "blocked";
   }
 
   if (batch.runs.some((run) => run.status === "failed")) {
     return "failed";
   }
 
-  if (batch.runs.length > 0 && batch.runs.every((run) => run.status === "completed")) {
-    return "completed";
+  if (batch.startedAt && batch.status === "failed" && batch.runs.length === 0) {
+    return "failed";
   }
 
-  if (batch.runs.some((run) => isRunPendingStatus(run.status))) {
-    return "running";
+  if (batch.runs.length === 0) {
+    return batch.startedAt ? "running" : "queued";
   }
 
-  if (batch.cancelRequested) {
-    return "cancelled";
-  }
-
-  return "queued";
+  return "completed";
 }
 
 function reconcileTerminalRun(run: Run, batch: Batch): void {
@@ -175,6 +194,10 @@ function reconcileTerminalRun(run: Run, batch: Batch): void {
     latestTurn.status = "cancelled";
     latestTurn.completedAt ||= inferredCompletedAt;
     latestTurn.error ||= "Batch cancelled.";
+    return;
+  }
+
+  if (latestTurn.status === "queued" && run.status === "queued") {
     return;
   }
 

@@ -140,6 +140,54 @@ test("applyCandidateScores sets null score and rank when no reviewer scores exis
   expect(candidateA.rank).toBeNull();
 });
 
+test("ranked workflow creates reviewer runs up front", async () => {
+  const batch = buildMockBatch({ mode: "ranked", runCount: 2, reviewCount: 2 });
+  const store = require("./test-helpers").buildMockStore(batch);
+  const candidateA = buildMockRun({ id: "run-1", index: 0, kind: "candidate" });
+  const candidateB = buildMockRun({ id: "run-2", index: 1, kind: "candidate" });
+
+  const reviewers = await wf.createAdditionalRuns(store, batch.id, batch.projectContext!, [candidateA, candidateB]);
+
+  expect(reviewers).toHaveLength(4);
+  expect(reviewers.every((run) => run.kind === "reviewer")).toBe(true);
+});
+
+test("ranked workflow blocks failed candidates and resets their reviewers on rerun", () => {
+  const batch = buildMockBatch({ mode: "ranked", reviewCount: 2 });
+  const candidate = buildMockRun({ id: "run-1", kind: "candidate", status: "failed" });
+  const reviewerA = buildMockRun({ id: "review-1", index: 1, kind: "reviewer", reviewedRunId: "run-1", status: "queued" });
+  const reviewerB = buildMockRun({ id: "review-2", index: 2, kind: "reviewer", reviewedRunId: "run-1", status: "queued" });
+  batch.runs = [candidate, reviewerA, reviewerB];
+  const store = require("./test-helpers").buildMockStore(batch);
+
+  expect(wf.getBlockingRunIds(batch)).toEqual(["run-1"]);
+  expect(wf.getRerunResetRunIds(batch, "run-1")).toEqual(["run-1", "review-1", "review-2"]);
+
+  wf.reconcileLifecycle(store, batch.id);
+
+  const updatedBatch = store.getBatch(batch.id)!;
+  expect(updatedBatch.runs.find((run: { id: string }) => run.id === "review-1")?.status).toBe("queued");
+});
+
+test("ranked workflow only starts reviewers after the candidate completes", () => {
+  const batch = buildMockBatch({ mode: "ranked", reviewCount: 1 });
+  const candidate = buildMockRun({
+    id: "run-1",
+    kind: "candidate",
+    status: "completed",
+    review: { currentBranch: "batch/b1/run-1" },
+  });
+  candidate.workingDirectory = "/repo/worktrees/run-1/project";
+  const reviewer = buildMockRun({ id: "review-1", index: 1, kind: "reviewer", reviewedRunId: "run-1", status: "queued" });
+  batch.runs = [candidate, reviewer];
+
+  expect(wf.isRunReady(batch, reviewer)).toBe(true);
+  const options = wf.getRunExecutionOptions(batch, reviewer, batch.projectContext!);
+  expect(options.sandboxModeOverride).toBe("read-only");
+  expect(options.workingDirectoryOverride).toBe("/repo/worktrees/run-1/project");
+  expect(options.promptOverride).toContain("The task is to:");
+});
+
 // --- onScoreSubmitted / onBatchSettled call recomputeRankedScores ---
 
 test("onScoreSubmitted triggers recomputeRankedScores for ranked batches", () => {

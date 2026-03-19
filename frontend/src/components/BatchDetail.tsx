@@ -40,7 +40,7 @@ export function BatchDetail() {
 
   const selectedBatch = batch;
   const selectedRun = selectedBatch.runs.find((r) => r.id === selectedRunId) ?? null;
-  const canCancel = selectedBatch.status === "running" || selectedBatch.status === "queued";
+  const canCancel = selectedBatch.status === "running" || selectedBatch.status === "queued" || selectedBatch.status === "blocked";
   const baseRef = selectedBatch.config.baseRef || selectedBatch.projectContext?.branchName || selectedBatch.projectContext?.headSha || "Current HEAD";
 
   const completedRuns = selectedBatch.runs.filter((r) => r.status === "completed").length;

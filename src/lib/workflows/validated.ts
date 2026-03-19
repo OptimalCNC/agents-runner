@@ -1,7 +1,7 @@
 import { getBundledMcpStatus } from "../codexMcp";
 import type { Batch, BatchStore, GenerationTask, ProjectContext, Run } from "../../types";
-import { buildRunRecord, finalizeQueuedRun, runWithConcurrency } from "../runner";
-import type { ExecuteRunFn, WorkflowDefinition } from "./types";
+import { buildRunRecord } from "../runner";
+import type { WorkflowDefinition } from "./types";
 import { listWorkerResultSubmissionsFromMcp } from "./shared";
 import {
   buildValidatorPrompt,
@@ -56,47 +56,6 @@ function enforceWorkerSubmission(store: BatchStore, batchId: string, runId: stri
   });
 }
 
-async function executeValidatorRun(
-  store: BatchStore,
-  batchId: string,
-  projectContext: ProjectContext,
-  executeRunFn: ExecuteRunFn,
-): Promise<void> {
-  const batch = store.getMutableBatch(batchId);
-  if (!batch) {
-    return;
-  }
-
-  const validatorRun = batch.runs.find((run) => run.kind === "validator");
-  if (!validatorRun || validatorRun.status !== "queued") {
-    return;
-  }
-
-  if (batch.cancelRequested) {
-    finalizeQueuedRun(store, batchId, validatorRun.id, "cancelled", "Batch cancelled before validation start.");
-    return;
-  }
-
-  const workerRuns = listWorkerRuns(batch);
-  const prompt = buildValidatorPrompt(batch, workerRuns);
-  const additionalDirectories = collectValidatorDirectories(workerRuns);
-
-  store.updateRun(batchId, validatorRun.id, (run) => {
-    run.prompt = prompt;
-    const turn = run.turns[0];
-    if (turn && turn.status === "queued") {
-      turn.prompt = prompt;
-    }
-  });
-
-  await executeRunFn(store, batchId, validatorRun.id, projectContext, {
-    promptOverride: prompt,
-    sandboxModeOverride: "read-only",
-    workingDirectoryOverride: projectContext.projectPath,
-    additionalDirectoriesOverride: additionalDirectories,
-  });
-}
-
 export const validatedWorkflow: WorkflowDefinition = {
   mode: "validated",
   label: "Validated",
@@ -130,32 +89,72 @@ export const validatedWorkflow: WorkflowDefinition = {
     }));
   },
 
-  async executeBatchRuns(
+  async createAdditionalRuns(
     store: BatchStore,
     batchId: string,
     projectContext: ProjectContext,
     candidateRuns: Run[],
-    executeRunFn: ExecuteRunFn,
-  ): Promise<void> {
+  ): Promise<Run[]> {
     const batch = store.getBatch(batchId)!;
-    const validatorRun = buildRunRecord(buildValidatorTask(batch), candidateRuns.length, "validator");
-    store.appendRun(batchId, validatorRun);
+    return [buildRunRecord(buildValidatorTask(batch), candidateRuns.length, "validator")];
+  },
 
-    await runWithConcurrency(candidateRuns, batch.config.concurrency, async (run) => {
-      const mutableBatch = store.getMutableBatch(batchId);
-      if (!mutableBatch || mutableBatch.cancelRequested) {
-        finalizeQueuedRun(store, batchId, run.id, "cancelled", "Batch cancelled before start.");
-        return;
-      }
+  reconcileLifecycle(store, batchId) {
+    const batch = store.getBatch(batchId);
+    if (!batch || batch.mode !== "validated") {
+      return;
+    }
 
-      await executeRunFn(store, batchId, run.id, projectContext, {
+    for (const workerRun of listWorkerRuns(batch)) {
+      enforceWorkerSubmission(store, batchId, workerRun.id);
+    }
+  },
+
+  isRunReady(batch, run) {
+    if (run.kind !== "validator") {
+      return true;
+    }
+
+    const workerRuns = listWorkerRuns(batch);
+    return workerRuns.length > 0
+      && workerRuns.every((entry) => entry.status === "completed" || entry.status === "cancelled");
+  },
+
+  getRunExecutionOptions(batch, run, projectContext) {
+    if (run.kind !== "validator") {
+      return {
         autoCreateBranch: false,
         developerInstructions: buildWorkerDeveloperInstructions(),
-      });
-      enforceWorkerSubmission(store, batchId, run.id);
-    });
+      };
+    }
 
-    await executeValidatorRun(store, batchId, projectContext, executeRunFn);
+    const workerRuns = listWorkerRuns(batch);
+    return {
+      promptOverride: buildValidatorPrompt(batch, workerRuns),
+      sandboxModeOverride: "read-only",
+      workingDirectoryOverride: projectContext.projectPath,
+      additionalDirectoriesOverride: collectValidatorDirectories(workerRuns),
+    };
+  },
+
+  getBlockingRunIds(batch) {
+    return batch.runs
+      .filter((run) => run.status === "failed")
+      .map((run) => run.id);
+  },
+
+  getRerunResetRunIds(batch, runId) {
+    const run = batch.runs.find((entry) => entry.id === runId);
+    if (!run) {
+      return [];
+    }
+
+    if (run.kind === "validator") {
+      return [runId];
+    }
+
+    const validatorRun = batch.runs.find((entry) => entry.kind === "validator");
+    return validatorRun ? [runId, validatorRun.id] : [runId];
   },
 
   onScoreSubmitted() {},

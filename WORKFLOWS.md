@@ -1,110 +1,187 @@
 # Workflow Architecture
 
-This document describes the workflow module system and how to add new workflow modes.
+This document describes the workflow module system and the lifecycle contract that every batch mode must follow.
+
+For the user-facing state machine, action semantics, and API surface, see [docs/run-lifecycle.md](docs/run-lifecycle.md).
 
 ## Overview
 
-Each batch mode (`"repeated"`, `"generated"`, `"ranked"`, `"validated"`) is implemented as a self-contained **workflow module** in `src/lib/workflows/`. Workflow modules implement the `WorkflowDefinition` interface and are registered in a central registry. The runner (`src/lib/runner.ts`) is a generic orchestrator that delegates all mode-specific decisions to the active workflow.
+Each batch mode (`"repeated"`, `"generated"`, `"ranked"`, `"validated"`) is implemented as a workflow module in `src/lib/workflows/`. The runner in `src/lib/runner.ts` owns scheduling, execution, run lifecycle actions, and batch status derivation. Workflow modules do not launch runs directly anymore. Instead, they answer workflow-specific questions:
+
+- which runs should exist
+- which queued runs are ready to start
+- how a run should be executed
+- which failed runs are currently blocking downstream progress
+- which dependent runs must be reset when a run is rerun
+
+That split is intentional: lifecycle controls such as `stop`, `rerun`, and `resume` must work consistently across all workflows, while the workflow decides dependency semantics.
 
 ## Directory Structure
 
-```
+```text
 src/lib/workflows/
-  types.ts        -- WorkflowDefinition interface and ExecuteRunFn type
-  shared.ts       -- Shared utilities: normalizeMode, normalizeNumericScore, extractReviewerScoreFromMcp
-  registry.ts     -- Workflow registry: Map<BatchMode, WorkflowDefinition> + getWorkflow()
+  types.ts        -- WorkflowDefinition interface and ExecuteRunOptions
+  shared.ts       -- Shared utilities: normalizeMode, score/result extraction
+  registry.ts     -- Workflow registry and getWorkflow()
   repeated.ts     -- "repeated" workflow implementation
-  generated.ts    -- "generated" workflow implementation (moves buildTaskSchema, generateTasks, etc.)
-  ranked.ts       -- "ranked" workflow implementation (moves scoring, reviewer logic, scheduler)
-  validated.ts    -- "validated" workflow implementation (workers + final validator)
-  test-helpers.ts -- Test utilities: mock stores, batches, runs
+  generated.ts    -- "generated" workflow implementation
+  ranked.ts       -- "ranked" workflow implementation
+  validated.ts    -- "validated" workflow implementation
+  test-helpers.ts -- Mock stores, batches, and runs for unit tests
   *.test.ts       -- Per-workflow and registry unit tests
 ```
 
 ## WorkflowDefinition Interface
 
-```typescript
+```ts
+interface ExecuteRunOptions {
+  promptOverride?: string;
+  sandboxModeOverride?: "workspace-write" | "read-only" | "danger-full-access";
+  workingDirectoryOverride?: string;
+  additionalDirectoriesOverride?: string[];
+  autoCreateBranch?: boolean;
+  developerInstructions?: string;
+}
+
 interface WorkflowDefinition {
-  mode: BatchMode; // "repeated" | "generated" | "ranked" | "validated"
-  label: string; // Display name: "Repeated", "Generated", "Ranked", "Validated"
+  mode: BatchMode;
+  label: string;
 
-  // Validate prompt fields before batch creation (throw on invalid)
-  validatePayload(p: {
-    prompt: string;
-    taskPrompt: string;
-    reviewPrompt: string;
-  }): void;
-
-  // Maximum concurrency for this workflow
+  validatePayload(p: { prompt: string; taskPrompt: string; reviewPrompt: string }): void;
   getMaxConcurrency(runCount: number, reviewCount: number): number;
-
-  // Initial generation state (null for repeated/ranked, pending for generated)
   buildInitialBatchState(): { generation: GenerationState | null };
-
-  // Which config prompt drives auto title generation
   getTitleSourcePrompt(batch: Batch): string;
 
-  // Create the task list from batch config (may call Codex for generated mode)
-  createTasks(store, batchId, projectContext): Promise<GenerationTask[]>;
+  createTasks(store: BatchStore, batchId: string, projectContext: ProjectContext): Promise<GenerationTask[]>;
+  createAdditionalRuns(
+    store: BatchStore,
+    batchId: string,
+    projectContext: ProjectContext,
+    candidateRuns: Run[],
+  ): Promise<Run[]>;
 
-  // Execute all candidate runs plus any workflow-specific follow-up runs
-  executeBatchRuns(
-    store,
-    batchId,
-    projectContext,
-    candidateRuns,
-    executeRunFn,
-  ): Promise<void>;
+  reconcileLifecycle(store: BatchStore, batchId: string): void;
+  isRunReady(batch: Batch, run: Run): boolean;
+  getRunExecutionOptions(batch: Batch, run: Run, projectContext: ProjectContext): ExecuteRunOptions;
+  getBlockingRunIds(batch: Batch): string[];
+  getRerunResetRunIds(batch: Batch, runId: string): string[];
 
-  // Called when a submit_score MCP call completes (ranked: recomputes scores)
-  onScoreSubmitted(store, batchId): void;
+  onScoreSubmitted(store: BatchStore, batchId: string): void;
+  onBatchSettled(store: BatchStore, batchId: string): void;
 
-  // Called after all runs settle (ranked: recomputes final scores)
-  onBatchSettled(store, batchId): void;
-
-  // Optional: pre-flight check before batch creation (ranked: MCP health check)
   preCreateCheck?(port: number): Promise<{ ok: boolean; error: string }>;
 }
 ```
 
-## Shared Infrastructure in `runner.ts`
+## Lifecycle Contract
 
-The following functions are exported from `runner.ts` for use by workflow modules:
+Every workflow must satisfy these rules.
 
-| Export                     | Purpose                                             |
-| -------------------------- | --------------------------------------------------- |
-| `executeRun`               | Execute a single run in a worktree                  |
-| `buildRunRecord`           | Build a new Run object from a GenerationTask        |
-| `runWithConcurrency`       | Run items in parallel with a concurrency limit      |
-| `finalizeQueuedRun`        | Cancel or fail a still-queued run                   |
-| `cancelQueuedRuns`         | Cancel all queued runs in a batch                   |
-| `getExecutionState`        | Get/create the AbortController registry for a batch |
-| `maybeClearExecutionState` | Clean up execution state when no controllers remain |
-| `getCodexClient`           | Create a Codex SDK client                           |
-| `getRunCreatedBranchName`  | Extract branch name from run logs                   |
-| `nowIso`                   | Current timestamp as ISO string                     |
+### 1. Run creation
 
-## How to Add a New Workflow
+- `createTasks(...)` creates the primary candidate/worker tasks.
+- `createAdditionalRuns(...)` creates any workflow-owned follow-up runs up front, such as ranked reviewers or the validated final validator.
+- Additional runs should be created in `queued` state. Readiness is handled separately by `isRunReady(...)`.
 
-### Step 1: Add the mode to `BatchMode`
+### 2. Readiness
 
-In `src/types.ts`:
+- `isRunReady(batch, run)` decides whether a queued run is runnable now.
+- The runner treats a batch as `running` when at least one run is active or at least one queued run is ready.
+- Queued-but-not-ready runs do not make a batch `running` by themselves.
 
-```typescript
-export type BatchMode = "repeated" | "generated" | "ranked" | "validated" | "yourmode";
-```
+### 3. Blocked-state detection
 
-In `frontend/src/types.ts` (frontend copy):
+- `getBlockingRunIds(batch)` returns the failed runs that are currently preventing workflow progress.
+- A failed run that does not gate any later stage should not be returned here.
+- If no runs are active, no queued runs are ready, and `getBlockingRunIds(...)` is non-empty, the batch becomes `blocked`.
+- A failed run does **not** automatically unblock later pipeline stages. The user must explicitly `stop`, `rerun`, or `resume` it.
 
-```typescript
-export type BatchMode = "repeated" | "generated" | "ranked" | "validated" | "yourmode";
-```
+### 4. Lifecycle reconciliation
 
-### Step 2: Implement the workflow module
+- `reconcileLifecycle(...)` is called whenever run state changes or the loader normalizes persisted data.
+- Use it to enforce workflow invariants:
+  - cancel queued dependent runs when their prerequisite was explicitly stopped
+  - recompute derived reviewer scores/ranks
+  - mark completed worker runs failed if they violate validator submission requirements
+- `reconcileLifecycle(...)` must be idempotent.
+
+### 5. Execution options
+
+- `getRunExecutionOptions(...)` returns the execution spec for a run that is about to start.
+- This is where workflows provide prompt overrides, read-only sandboxes, developer instructions, and additional directories.
+- The runner still performs the actual launch and stream handling.
+
+### 6. Rerun reset rules
+
+- `getRerunResetRunIds(batch, runId)` returns every run that must be reset to a fresh attempt when `runId` is rerun.
+- Include the target run itself.
+- Resetting means the old attempt history is cleared in place and the same run card is reused.
+
+## Built-In Workflow Rules
+
+### repeated
+
+- Only candidate runs exist.
+- No staged dependencies.
+- `getBlockingRunIds(...)` always returns `[]`.
+- Rerunning one run resets only that run.
+
+### generated
+
+- Same lifecycle semantics as `repeated`.
+- The only additional step is task generation before candidate runs are created.
+- Generated batches never use `blocked`.
+
+### ranked
+
+- Candidate runs are created first.
+- Reviewer runs are created up front in `queued` state.
+- A reviewer is ready only after its candidate completed and produced a working directory to inspect.
+- Failed candidates block their reviewer stage.
+- Failed reviewers block final ranked settlement.
+- Stopping a candidate cancels its queued reviewers.
+- Rerunning a candidate resets that candidate plus all of its reviewers.
+- Rerunning a reviewer resets only that reviewer.
+
+### validated
+
+- Worker runs are created first.
+- One validator run is created up front in `queued` state.
+- The validator is ready only after every worker is resolved (`completed` or explicitly `cancelled`).
+- Failed workers block validator start.
+- Failed validators block batch completion.
+- Worker runs must submit exactly one result artifact; invalid submissions are converted to `failed` by `reconcileLifecycle(...)`.
+- Rerunning a worker resets that worker plus the validator.
+- Rerunning the validator resets only the validator.
+
+## Shared Runner Responsibilities
+
+The runner owns:
+
+- long-lived per-batch scheduling
+- concurrency limits
+- `stop`, `rerun`, and `resume`
+- active-run abort handling
+- same-thread resume behavior
+- batch status derivation (`queued`, `running`, `blocked`, `failed`, `completed`, `cancelled`)
+- persistence and stream processing
+
+If you need to change how stages unblock, which failures become `blocked`, or which dependents are reset on rerun, update the workflow module first and then verify the runner-level lifecycle tests still pass.
+
+## How To Add A New Workflow
+
+### Step 1: Add the mode type
+
+Update both:
+
+- `src/types.ts`
+- `frontend/src/types.ts`
+
+### Step 2: Implement the backend workflow module
 
 Create `src/lib/workflows/yourmode.ts`:
 
-```typescript
+```ts
 import type {
   Batch,
   BatchStore,
@@ -112,15 +189,17 @@ import type {
   ProjectContext,
   Run,
 } from "../../types";
-import { finalizeQueuedRun, runWithConcurrency } from "../runner";
-import type { ExecuteRunFn, WorkflowDefinition } from "./types";
+import { buildRunRecord } from "../runner";
+import type { WorkflowDefinition } from "./types";
 
 export const yourmodeWorkflow: WorkflowDefinition = {
   mode: "yourmode",
   label: "Your Mode",
 
   validatePayload({ prompt }) {
-    if (!prompt) throw new Error("Prompt is required for Your Mode.");
+    if (!prompt.trim()) {
+      throw new Error("Prompt is required for Your Mode.");
+    }
   },
 
   getMaxConcurrency(runCount) {
@@ -137,40 +216,32 @@ export const yourmodeWorkflow: WorkflowDefinition = {
 
   async createTasks(store, batchId) {
     const batch = store.getBatch(batchId)!;
-    return Array.from({ length: batch.config.runCount }, (_, i) => ({
-      title: `Run ${i + 1}`,
+    return Array.from({ length: batch.config.runCount }, (_, index) => ({
+      title: `Run ${index + 1}`,
       prompt: batch.config.prompt,
     }));
   },
 
-  async executeBatchRuns(
-    store,
-    batchId,
-    projectContext,
-    candidateRuns,
-    executeRunFn,
-  ) {
-    const batch = store.getBatch(batchId)!;
-    await runWithConcurrency(
-      candidateRuns,
-      batch.config.concurrency,
-      async (run) => {
-        const mutableBatch = store.getMutableBatch(batchId);
-        if (!mutableBatch || mutableBatch.cancelRequested) {
-          finalizeQueuedRun(
-            store,
-            batchId,
-            run.id,
-            "cancelled",
-            "Batch cancelled before start.",
-          );
-          return;
-        }
-        await executeRunFn(store, batchId, run.id, projectContext, {
-          autoCreateBranch: false,
-        });
-      },
-    );
+  async createAdditionalRuns(_store, _batchId, _projectContext, _candidateRuns) {
+    return [];
+  },
+
+  reconcileLifecycle() {},
+
+  isRunReady(_batch, run) {
+    return run.kind !== "reviewer" && run.kind !== "validator";
+  },
+
+  getRunExecutionOptions() {
+    return { autoCreateBranch: false };
+  },
+
+  getBlockingRunIds() {
+    return [];
+  },
+
+  getRerunResetRunIds(_batch, runId) {
+    return [runId];
   },
 
   onScoreSubmitted() {},
@@ -178,104 +249,34 @@ export const yourmodeWorkflow: WorkflowDefinition = {
 };
 ```
 
-### Step 3: Register in the registry
+If your workflow needs extra queued runs, create them with `buildRunRecord(...)` inside `createAdditionalRuns(...)`.
 
-In `src/lib/workflows/registry.ts`:
+### Step 3: Register the backend workflow
 
-```typescript
-import { yourmodeWorkflow } from "./yourmode";
+Update `src/lib/workflows/registry.ts`.
 
-const workflows = new Map<BatchMode, WorkflowDefinition>([
-  ["repeated", repeatedWorkflow],
-  ["generated", generatedWorkflow],
-  ["ranked", rankedWorkflow],
-  ["yourmode", yourmodeWorkflow], // add this
-]);
-```
+### Step 4: Update mode normalization if needed
 
-### Step 4: Add normalizeMode alias (if needed)
+If the mode has legacy names, update `src/lib/workflows/shared.ts`.
 
-If your mode has legacy names, add them to `src/lib/workflows/shared.ts`:
+### Step 5: Add the frontend workflow UI module
 
-```typescript
-export function normalizeMode(value: unknown): BatchMode {
-  // ...existing cases...
-  if (value === "yourmode" || value === "your-legacy-name") {
-    return "yourmode";
-  }
-  return "repeated";
-}
-```
-
-Note: `frontend/src/utils/format.ts` has its own copy of `normalizeMode` for the frontend — update it too.
-
-### Step 5: Add a frontend WorkflowUI module
-
-Create `frontend/src/workflows/yourmode.tsx` implementing the `WorkflowUI` interface from `frontend/src/workflows/types.ts`:
-
-```typescript
-import type { WorkflowUI, FormFieldsProps, RunsGridProps } from "./types.js";
-import { RunCard } from "../components/RunCard.js";
-
-export const yourmodeWorkflow: WorkflowUI = {
-  mode: "yourmode",
-  label: "Your Mode",
-  Icon: YourModeIcon,                               // SVG icon for the mode selector
-
-  getMaxConcurrency(runCount) { return runCount; }, // concurrency cap
-  getConcurrencyHint(limit) { return `Max ${limit} parallel runs.`; },
-  canSubmit({ prompt }) { return prompt.trim().length > 0; },
-  FormFields: YourModeFormFields,                   // mode-specific prompt inputs
-
-  buildRunsSummaryLabel(batch) { return `${batch.runs.length} / ${batch.config.runCount}`; },
-  RunsGrid: YourModeRunsGrid,                       // runs display in BatchDetail
-  TasksSection: null,                               // or a component for task lists
-
-  isSessionReadOnly: false,
-  showReviewTab() { return true; },
-  getRunCardExtras() { return null; },              // or return { tags, scoreLabel, rankLabel }
-};
-```
-
-Register it in `frontend/src/workflows/registry.ts`:
-
-```typescript
-import { yourmodeWorkflow } from "./yourmode.js";
-
-const workflows = new Map<BatchMode, WorkflowUI>([
-  // ...existing entries...
-  ["yourmode", yourmodeWorkflow],
-]);
-```
-
-The `NewBatchDrawer`, `BatchDetail`, `RunDetail`, and `RunCard` components all delegate to the registry automatically — no manual edits needed in those files.
+Create `frontend/src/workflows/yourmode.tsx`, register it in `frontend/src/workflows/registry.ts`, and update any frontend mode-label helpers as needed.
 
 ### Step 6: Write tests
 
-Create `src/lib/workflows/yourmode.test.ts` testing the pure functions. See `repeated.test.ts` and `generated.test.ts` for examples. Add your mode to the registry guard tests in `registry.test.ts`:
+Minimum backend coverage:
 
-```typescript
-const ALL_MODES: BatchMode[] = ["repeated", "generated", "ranked", "validated", "yourmode"];
-```
+- payload validation
+- task creation
+- `isRunReady(...)`
+- `getBlockingRunIds(...)`
+- `getRerunResetRunIds(...)`
+- any lifecycle reconciliation side effects
 
-## Testing Guide
+If the workflow introduces stage dependencies, also add runner or batch-store regression tests covering:
 
-Tests are organized in three tiers:
-
-1. **Registry guards** (`registry.test.ts`) — ensure every registered workflow implements the full interface
-2. **Per-workflow unit tests** (`*.test.ts`) — test pure functions in isolation using mock stores
-3. **Shared utility tests** (`shared.test.ts`) — test `normalizeMode`, score extraction
-
-Use `buildMockStore`, `buildMockBatch`, `buildMockRun`, etc. from `test-helpers.ts` to construct test fixtures without touching the file system.
-
-Run all tests:
-
-```sh
-bun test
-```
-
-Run only workflow tests:
-
-```sh
-bun test src/lib/workflows/
-```
+- blocked-state transitions
+- stop behavior for failed blockers
+- rerun reset propagation
+- loader normalization after restart

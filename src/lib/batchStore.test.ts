@@ -505,3 +505,141 @@ test("load does not promote stranded runs that only have a final response", asyn
   await new Promise((resolve) => setTimeout(resolve, 200));
   await fs.rm(root, { recursive: true, force: true });
 });
+
+test("load marks ranked batches blocked when a failed candidate still gates reviewer runs", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agents-runner-batchstore-"));
+  const batchDir = path.join(root, "batches", "blocked1");
+  const runsDir = path.join(batchDir, "runs");
+  await fs.mkdir(runsDir, { recursive: true });
+
+  await fs.writeFile(path.join(batchDir, "batch.json"), `${JSON.stringify({
+    id: "blocked1",
+    mode: "ranked",
+    title: "Blocked ranked batch",
+    status: "failed",
+    createdAt: "2026-03-17T03:28:00.000Z",
+    startedAt: "2026-03-17T03:28:01.000Z",
+    completedAt: "2026-03-17T03:40:00.000Z",
+    cancelRequested: false,
+    error: "Some runs failed.",
+    config: {
+      runCount: 1,
+      concurrency: 1,
+      reviewCount: 1,
+      projectPath: "/repo/project",
+      worktreeRoot: "/repo",
+      prompt: "Do work.",
+      taskPrompt: "",
+      reviewPrompt: "Review it.",
+      baseRef: "main",
+      model: "",
+      sandboxMode: "workspace-write",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+      reasoningEffort: "",
+    },
+    generation: null,
+    projectContext: {
+      projectPath: "/repo/project",
+      repoRoot: "/repo",
+      relativeProjectPath: "project",
+      headSha: "abc123",
+      branchName: "main",
+    },
+    runIds: ["run-1", "review-1"],
+  }, null, 2)}\n`);
+
+  await fs.writeFile(path.join(runsDir, "run-1.json"), `${JSON.stringify({
+    id: "run-1",
+    index: 0,
+    title: "Run 1",
+    prompt: "Do work.",
+    status: "failed",
+    startedAt: "2026-03-17T03:28:22.014Z",
+    completedAt: "2026-03-17T03:35:00.000Z",
+    threadId: "thread-1",
+    worktreePath: "/repo/worktrees/run-1",
+    workingDirectory: "/repo/worktrees/run-1/project",
+    baseRef: "main",
+    finalResponse: "",
+    error: "Candidate failed.",
+    usage: null,
+    logs: [],
+    turns: [
+      {
+        id: "turn-1",
+        index: 0,
+        prompt: "Do work.",
+        status: "failed",
+        submittedAt: "2026-03-17T03:28:22.014Z",
+        startedAt: "2026-03-17T03:30:40.193Z",
+        completedAt: "2026-03-17T03:35:00.000Z",
+        finalResponse: "",
+        error: "Candidate failed.",
+        usage: null,
+        items: [],
+      },
+    ],
+    items: [],
+    review: null,
+    followUpsReopened: false,
+    followUpsReopenedAt: null,
+    kind: "candidate",
+    score: null,
+    rank: null,
+    reviewedRunId: null,
+  }, null, 2)}\n`);
+
+  await fs.writeFile(path.join(runsDir, "review-1.json"), `${JSON.stringify({
+    id: "review-1",
+    index: 1,
+    title: "Review 1",
+    prompt: "Review.",
+    status: "queued",
+    startedAt: null,
+    completedAt: null,
+    threadId: null,
+    worktreePath: null,
+    workingDirectory: null,
+    baseRef: null,
+    finalResponse: "",
+    error: null,
+    usage: null,
+    logs: [],
+    turns: [
+      {
+        id: "turn-1",
+        index: 0,
+        prompt: "Review.",
+        status: "queued",
+        submittedAt: "2026-03-17T03:28:22.014Z",
+        startedAt: null,
+        completedAt: null,
+        finalResponse: "",
+        error: null,
+        usage: null,
+        items: [],
+      },
+    ],
+    items: [],
+    review: null,
+    followUpsReopened: false,
+    followUpsReopenedAt: null,
+    kind: "reviewer",
+    score: null,
+    rank: null,
+    reviewedRunId: "run-1",
+  }, null, 2)}\n`);
+
+  const store = createBatchStore(root);
+  await store.load();
+
+  const batch = store.getBatch("blocked1");
+  expect(batch).not.toBeNull();
+  expect(batch!.status).toBe("blocked");
+  expect(batch!.runs[0]?.status).toBe("failed");
+  expect(batch!.runs[1]?.status).toBe("queued");
+
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await fs.rm(root, { recursive: true, force: true });
+});

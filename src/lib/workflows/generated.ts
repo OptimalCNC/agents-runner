@@ -1,7 +1,7 @@
 import { isAbortError } from "../process";
-import { finalizeQueuedRun, getCodexClient, getExecutionState, maybeClearExecutionState, runWithConcurrency } from "../runner";
+import { getCodexClient, getExecutionState, maybeClearExecutionState } from "../runner";
 import type { Batch, BatchStore, GenerationTask, ProjectContext, Run } from "../../types";
-import type { ExecuteRunFn, WorkflowDefinition } from "./types";
+import type { WorkflowDefinition } from "./types";
 
 const NON_INTERACTIVE_APPROVAL_POLICY = "never" as const;
 
@@ -139,24 +139,26 @@ export const generatedWorkflow: WorkflowDefinition = {
     return generateTasks(store, batchId, projectContext);
   },
 
-  async executeBatchRuns(
-    store: BatchStore,
-    batchId: string,
-    projectContext: ProjectContext,
-    candidateRuns: Run[],
-    executeRunFn: ExecuteRunFn,
-  ): Promise<void> {
-    const batch = store.getBatch(batchId)!;
+  async createAdditionalRuns(): Promise<Run[]> {
+    return [];
+  },
 
-    await runWithConcurrency(candidateRuns, batch.config.concurrency, async (run) => {
-      const mutableBatch = store.getMutableBatch(batchId);
-      if (!mutableBatch || mutableBatch.cancelRequested) {
-        finalizeQueuedRun(store, batchId, run.id, "cancelled", "Batch cancelled before start.");
-        return;
-      }
+  reconcileLifecycle() {},
 
-      await executeRunFn(store, batchId, run.id, projectContext, { autoCreateBranch: false });
-    });
+  isRunReady(_batch, run) {
+    return run.kind !== "reviewer" && run.kind !== "validator";
+  },
+
+  getRunExecutionOptions() {
+    return { autoCreateBranch: false };
+  },
+
+  getBlockingRunIds() {
+    return [];
+  },
+
+  getRerunResetRunIds(_batch, runId) {
+    return [runId];
   },
 
   onScoreSubmitted() {},
