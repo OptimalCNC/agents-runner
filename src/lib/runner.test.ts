@@ -4,13 +4,14 @@ import {
   buildCodexTurnConfig,
   continueRun,
   createRunId,
+  executeRun,
   reopenRunFollowUps,
   setCodexClientFactoryForTests,
   requestRunCommitFollowUp,
 } from "./runner";
 import { buildReviewPrompt } from "./workflows/ranked";
 import { buildMockBatch, buildMockRun, buildMockStore } from "./workflows/test-helpers";
-import type { Batch } from "../types";
+import type { Batch, Run, RunTurn } from "../types";
 
 async function* emptyEvents(): AsyncIterable<unknown> {
   return;
@@ -43,6 +44,115 @@ function installMockCodexClient(): void {
 
 function resetMockCodexClient(): void {
   setCodexClientFactoryForTests(null);
+}
+
+function streamEvents(
+  events: unknown[],
+  error: Error | null = null,
+): AsyncIterable<unknown> {
+  return (async function* generateEvents(): AsyncIterable<unknown> {
+    for (const event of events) {
+      yield event;
+    }
+
+    if (error) {
+      throw error;
+    }
+  })();
+}
+
+function installStreamingMockCodexClient(options: {
+  startEvents?: unknown[];
+  startError?: Error | null;
+  resumeEvents?: unknown[];
+  resumeError?: Error | null;
+}): void {
+  setCodexClientFactoryForTests(() => ({
+    startThread() {
+      return {
+        async run() {
+          return { finalResponse: "{\"tasks\":[]}" };
+        },
+        async runStreamed() {
+          return {
+            events: streamEvents(options.startEvents ?? [], options.startError ?? null),
+          };
+        },
+      };
+    },
+    resumeThread() {
+      return {
+        async run() {
+          return { finalResponse: "" };
+        },
+        async runStreamed() {
+          return {
+            events: streamEvents(options.resumeEvents ?? [], options.resumeError ?? null),
+          };
+        },
+      };
+    },
+  }));
+}
+
+async function waitFor<T>(getValue: () => T | null, timeoutMs: number = 2_000): Promise<T> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const value = getValue();
+    if (value !== null) {
+      return value;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error("Timed out waiting for test condition.");
+}
+
+function buildCompletedTurn(overrides: Partial<RunTurn> = {}): RunTurn {
+  return {
+    id: "turn-1",
+    index: 0,
+    prompt: "Do work.",
+    status: "completed",
+    submittedAt: "2026-01-01T00:00:00.000Z",
+    startedAt: "2026-01-01T00:00:01.000Z",
+    completedAt: "2026-01-01T00:00:05.000Z",
+    finalResponse: "done",
+    error: null,
+    usage: {
+      input_tokens: 10,
+      output_tokens: 5,
+    },
+    codexConfig: null,
+    items: [],
+    ...overrides,
+  };
+}
+
+function buildResumableRun(overrides: Partial<Run> = {}): Run {
+  const run = buildMockRun({
+    id: overrides.id ?? "run-1",
+    index: overrides.index ?? 0,
+    kind: overrides.kind,
+    status: overrides.status ?? "completed",
+    turns: overrides.turns ?? [buildCompletedTurn()],
+    followUpsReopened: overrides.followUpsReopened ?? false,
+    followUpsReopenedAt: overrides.followUpsReopenedAt ?? null,
+  });
+  run.threadId = overrides.threadId ?? "thread-1";
+  run.workingDirectory = overrides.workingDirectory ?? "/repo/project";
+  run.worktreePath = overrides.worktreePath ?? "/repo/worktrees/run-1";
+  run.baseRef = overrides.baseRef ?? "main";
+  run.startedAt = overrides.startedAt ?? "2026-01-01T00:00:01.000Z";
+  run.completedAt = overrides.completedAt ?? "2026-01-01T00:00:05.000Z";
+  run.finalResponse = overrides.finalResponse ?? "done";
+  run.usage = overrides.usage ?? {
+    input_tokens: 10,
+    output_tokens: 5,
+  };
+  return { ...run, ...overrides };
 }
 
 test("createRunId returns a stable run id derived from the run index", () => {
@@ -369,6 +479,222 @@ test("continueRun resumes reopened validator runs", async () => {
       "/repo/worktrees/worker-1",
       "/repo/worktrees/worker-2",
     ]);
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("executeRun keeps runs completed when an error item is followed by turn completion", async () => {
+  installStreamingMockCodexClient({
+    startEvents: [
+      { type: "thread.started", thread_id: "thread-run-1" },
+      { type: "turn.started" },
+      { type: "item.completed", item: { id: "item-1", type: "error", message: "temporary stream issue" } },
+      { type: "item.completed", item: { id: "item-2", type: "agent_message", text: "done" } },
+      { type: "turn.completed", usage: { input_tokens: 12, output_tokens: 7 } },
+    ],
+  });
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    const run = buildMockRun({ id: "run-1", status: "queued" });
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await executeRun(store, batch.id, run.id, batch.projectContext!, {
+      workingDirectoryOverride: "/repo/project",
+    });
+
+    const updatedRun = store.getBatch(batch.id)!.runs[0];
+    const turn = updatedRun.turns[0];
+    expect(turn.status).toBe("completed");
+    expect(turn.error).toBeNull();
+    expect(updatedRun.status).toBe("completed");
+    expect(updatedRun.error).toBeNull();
+    expect(updatedRun.logs.some((entry) => entry.level === "warning" && entry.message === "Error: temporary stream issue")).toBe(true);
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("executeRun treats reconnect events as warnings and still completes", async () => {
+  installStreamingMockCodexClient({
+    startEvents: [
+      { type: "thread.started", thread_id: "thread-run-1" },
+      { type: "turn.started" },
+      { type: "error", message: "Reconnecting... 1/5 (stream disconnected before completion)" },
+      { type: "item.completed", item: { id: "item-1", type: "agent_message", text: "done" } },
+      { type: "turn.completed", usage: { input_tokens: 8, output_tokens: 3 } },
+    ],
+  });
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    const run = buildMockRun({ id: "run-1", status: "queued" });
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await executeRun(store, batch.id, run.id, batch.projectContext!, {
+      workingDirectoryOverride: "/repo/project",
+    });
+
+    const updatedRun = store.getBatch(batch.id)!.runs[0];
+    expect(updatedRun.status).toBe("completed");
+    expect(updatedRun.error).toBeNull();
+    expect(updatedRun.logs.some((entry) => entry.level === "warning" && entry.message.startsWith("Reconnecting..."))).toBe(true);
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("executeRun keeps a completed turn completed when the stream throws afterward", async () => {
+  installStreamingMockCodexClient({
+    startEvents: [
+      { type: "thread.started", thread_id: "thread-run-1" },
+      { type: "turn.started" },
+      { type: "item.completed", item: { id: "item-1", type: "agent_message", text: "done" } },
+      { type: "turn.completed", usage: { input_tokens: 21, output_tokens: 13 } },
+    ],
+    startError: new Error("stream disconnected after completion"),
+  });
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    const run = buildMockRun({ id: "run-1", status: "queued" });
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await executeRun(store, batch.id, run.id, batch.projectContext!, {
+      workingDirectoryOverride: "/repo/project",
+    });
+
+    const updatedRun = store.getBatch(batch.id)!.runs[0];
+    expect(updatedRun.status).toBe("completed");
+    expect(updatedRun.error).toBeNull();
+    expect(updatedRun.logs.some((entry) => entry.level === "info" && entry.message === "Run completed.")).toBe(true);
+    expect(updatedRun.logs.some((entry) => entry.level === "warning" && entry.message === "stream disconnected after completion")).toBe(true);
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("executeRun preserves turn.failed as a terminal failure", async () => {
+  installStreamingMockCodexClient({
+    startEvents: [
+      { type: "thread.started", thread_id: "thread-run-1" },
+      { type: "turn.started" },
+      { type: "turn.failed", error: { message: "Model crashed" } },
+    ],
+  });
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    const run = buildMockRun({ id: "run-1", status: "queued" });
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await executeRun(store, batch.id, run.id, batch.projectContext!, {
+      workingDirectoryOverride: "/repo/project",
+    });
+
+    const updatedRun = store.getBatch(batch.id)!.runs[0];
+    expect(updatedRun.status).toBe("failed");
+    expect(updatedRun.error).toBe("Model crashed");
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("executeRun fails stranded streams that only produced a final response", async () => {
+  installStreamingMockCodexClient({
+    startEvents: [
+      { type: "thread.started", thread_id: "thread-run-1" },
+      { type: "turn.started" },
+      { type: "item.completed", item: { id: "item-1", type: "agent_message", text: "partial output" } },
+    ],
+  });
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    const run = buildMockRun({ id: "run-1", status: "queued" });
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await executeRun(store, batch.id, run.id, batch.projectContext!, {
+      workingDirectoryOverride: "/repo/project",
+    });
+
+    const updatedRun = store.getBatch(batch.id)!.runs[0];
+    expect(updatedRun.status).toBe("failed");
+    expect(updatedRun.error).toBe("Run ended without reaching a terminal state.");
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("continueRun keeps resumed turns completed when reconnect warnings are followed by completion", async () => {
+  installStreamingMockCodexClient({
+    resumeEvents: [
+      { type: "turn.started" },
+      { type: "error", message: "Reconnecting... 2/5 (stream disconnected before completion)" },
+      { type: "item.completed", item: { id: "item-1", type: "agent_message", text: "done again" } },
+      { type: "turn.completed", usage: { input_tokens: 17, output_tokens: 6 } },
+    ],
+  });
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    batch.status = "completed";
+    const run = buildResumableRun();
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await continueRun(store, batch.id, run.id, "Continue working");
+
+    const latestTurn = await waitFor(() => {
+      const current = store.getBatch(batch.id)?.runs[0]?.turns.at(-1) ?? null;
+      return current && (current.status === "completed" || current.status === "failed" || current.status === "cancelled")
+        ? current
+        : null;
+    });
+
+    const updatedRun = store.getBatch(batch.id)!.runs[0];
+    expect(latestTurn.status).toBe("completed");
+    expect(latestTurn.error).toBeNull();
+    expect(updatedRun.status).toBe("completed");
+    expect(updatedRun.logs.some((entry) => entry.level === "warning" && entry.message.startsWith("Reconnecting..."))).toBe(true);
+    expect(updatedRun.logs.some((entry) => entry.level === "info" && entry.message === "Follow-up turn completed.")).toBe(true);
+  } finally {
+    resetMockCodexClient();
+  }
+});
+
+test("continueRun fails resumed turns when the stream strands without terminal completion evidence", async () => {
+  installStreamingMockCodexClient({
+    resumeEvents: [
+      { type: "turn.started" },
+      { type: "item.completed", item: { id: "item-1", type: "agent_message", text: "partial follow-up output" } },
+    ],
+  });
+
+  try {
+    const batch = buildMockBatch({ mode: "repeated" });
+    batch.status = "completed";
+    const run = buildResumableRun();
+    batch.runs = [run];
+    const store = buildMockStore(batch);
+
+    await continueRun(store, batch.id, run.id, "Continue working");
+
+    const latestTurn = await waitFor(() => {
+      const current = store.getBatch(batch.id)?.runs[0]?.turns.at(-1) ?? null;
+      return current && (current.status === "completed" || current.status === "failed" || current.status === "cancelled")
+        ? current
+        : null;
+    });
+
+    expect(latestTurn.status).toBe("failed");
+    expect(latestTurn.error).toBe("Run ended without reaching a terminal state.");
   } finally {
     resetMockCodexClient();
   }

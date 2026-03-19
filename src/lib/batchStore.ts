@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 
+import { hasStrongLatestTurnCompletionEvidence, isTransientStreamWarningMessage } from "./runCompletion";
 import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 import { getWorkflow } from "./workflows/registry";
 import { extractReviewerScoreFromMcp, normalizeMode } from "./workflows/shared";
@@ -151,7 +152,7 @@ function deriveBatchStatus(batch: Batch): BatchStatus {
 
 function reconcileTerminalRun(run: Run, batch: Batch): void {
   const latestTurn = getLatestRunTurn(run);
-  if (!latestTurn || isRunTerminalStatus(latestTurn.status)) {
+  if (!latestTurn) {
     return;
   }
 
@@ -163,22 +164,31 @@ function reconcileTerminalRun(run: Run, batch: Batch): void {
     || batch.startedAt
     || nowIso();
 
-  if (batch.status === "completed" && !latestTurn.error) {
+  if (hasStrongLatestTurnCompletionEvidence(run)) {
     latestTurn.status = "completed";
-    latestTurn.completedAt = inferredCompletedAt;
+    latestTurn.completedAt ||= inferredCompletedAt;
+    latestTurn.error = null;
     return;
   }
 
   if (batch.status === "cancelled" || batch.cancelRequested) {
     latestTurn.status = "cancelled";
-    latestTurn.completedAt = inferredCompletedAt;
+    latestTurn.completedAt ||= inferredCompletedAt;
     latestTurn.error ||= "Batch cancelled.";
     return;
   }
 
-  latestTurn.status = "failed";
-  latestTurn.completedAt = inferredCompletedAt;
-  latestTurn.error ||= batch.error || "Batch failed.";
+  if (!isRunTerminalStatus(latestTurn.status)) {
+    latestTurn.status = "failed";
+    latestTurn.completedAt ||= inferredCompletedAt;
+    latestTurn.error ||= batch.error || "Run ended without reaching a terminal state.";
+    return;
+  }
+
+  if (latestTurn.status === "failed" && isTransientStreamWarningMessage(latestTurn.error)) {
+    latestTurn.completedAt ||= inferredCompletedAt;
+    latestTurn.error = batch.error || "Run ended without reaching a terminal state.";
+  }
 }
 
 function recomputeRankedScores(batch: Batch): void {
@@ -272,6 +282,9 @@ function normalizeLoadedBatch(batch: Batch): void {
 
   recomputeRankedScores(batch);
   batch.status = deriveBatchStatus(batch);
+  if (batch.status !== "failed" && batch.status !== "cancelled") {
+    batch.error = null;
+  }
 
   if (batch.status === "completed" && !batch.completedAt) {
     batch.completedAt = batch.runs.map((run) => run.completedAt).filter(Boolean).sort().at(-1) ?? nowIso();

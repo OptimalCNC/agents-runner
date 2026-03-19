@@ -18,9 +18,9 @@ import {
   getReopenFollowUpsError,
 } from "./followUps";
 import { isAbortError } from "./process";
+import { hasStrongLatestTurnCompletionEvidence } from "./runCompletion";
 import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 import { getWorkflow } from "./workflows/registry";
-import { extractReviewerScoreFromMcp } from "./workflows/shared";
 
 import type {
   Batch,
@@ -771,25 +771,60 @@ function getRunTerminalTimestamp(run: Run): string {
     || nowIso();
 }
 
-function hasRunCompletionEvidence(run: Run): boolean {
-  const latestTurn = getLatestRunTurn(run);
-  if (latestTurn?.error) {
-    return false;
+function appendLogIfChanged(run: Run, level: string, message: string): void {
+  const normalizedMessage = truncateText(message, 1_200);
+  const lastLog = run.logs.at(-1);
+  if (lastLog?.level === level && lastLog.message === normalizedMessage) {
+    return;
   }
 
-  if (extractReviewerScoreFromMcp(run) !== null) {
-    return true;
+  appendLog(run, level, normalizedMessage);
+}
+
+interface FinalizeStreamedTurnOptions {
+  completedMessage: string;
+  cancelled?: boolean;
+  streamErrorMessage?: string | null;
+}
+
+function finalizeStreamedTurn(run: Run, turn: RunTurn, options: FinalizeStreamedTurnOptions): void {
+  const streamErrorMessage = String(options.streamErrorMessage ?? "").trim();
+
+  if (turn.status === "failed") {
+    turn.completedAt ||= nowIso();
+    if (!turn.error && streamErrorMessage) {
+      turn.error = streamErrorMessage;
+    }
+    syncRunDerivedState(run);
+    return;
   }
 
-  if (latestTurn?.finalResponse || run.finalResponse) {
-    return true;
+  if (hasStrongLatestTurnCompletionEvidence(run)) {
+    turn.status = "completed";
+    turn.completedAt ||= nowIso();
+    turn.error = null;
+    appendLogIfChanged(run, "info", options.completedMessage);
+    if (streamErrorMessage) {
+      appendLogIfChanged(run, "warning", streamErrorMessage);
+    }
+    syncRunDerivedState(run);
+    return;
   }
 
-  return run.logs.some((entry) =>
-    entry.message.startsWith("Turn completed.")
-      || entry.message === "Run completed."
-      || entry.message === "Follow-up turn completed.",
-  );
+  if (options.cancelled) {
+    turn.status = "cancelled";
+    turn.completedAt ||= nowIso();
+    turn.error = "Batch cancelled.";
+    appendLogIfChanged(run, "warning", turn.error);
+    syncRunDerivedState(run);
+    return;
+  }
+
+  turn.status = "failed";
+  turn.completedAt ||= nowIso();
+  turn.error = streamErrorMessage || "Run ended without reaching a terminal state.";
+  appendLogIfChanged(run, "error", turn.error);
+  syncRunDerivedState(run);
 }
 
 function reconcileSettledBatchRuns(store: BatchStore, batchId: string): void {
@@ -823,8 +858,9 @@ function reconcileSettledBatchRuns(store: BatchStore, batchId: string): void {
       if (batch.cancelRequested) {
         latestTurn.status = "cancelled";
         latestTurn.error ||= "Batch cancelled.";
-      } else if (hasRunCompletionEvidence(run)) {
+      } else if (hasStrongLatestTurnCompletionEvidence(run)) {
         latestTurn.status = "completed";
+        latestTurn.error = null;
       } else {
         latestTurn.status = "failed";
         latestTurn.error ||= "Run ended without reaching a terminal state.";
@@ -927,7 +963,10 @@ async function streamTurnEvents(
           appendLog(run, "info", "Codex turn started.");
           break;
         case "turn.completed":
+          turn.status = "completed";
+          turn.completedAt ||= nowIso();
           turn.usage = evt.usage as Run["usage"];
+          turn.error = null;
           appendLog(run, "info", evt.usage
             ? `Turn completed. Tokens in/out: ${(evt.usage as Record<string, unknown>).input_tokens}/${(evt.usage as Record<string, unknown>).output_tokens}.`
             : "Turn completed.");
@@ -951,9 +990,6 @@ async function streamTurnEvents(
           if (completedItem.type === "agent_message") {
             turn.finalResponse = truncateText(completedItem.text ?? "");
           }
-          if (completedItem.type === "error") {
-            turn.error = completedItem.message as string;
-          }
 
           if (
             completedItem.type === "mcp_tool_call"
@@ -964,13 +1000,11 @@ async function streamTurnEvents(
             shouldRecomputeRankedScores = true;
           }
 
-          appendLog(run, "info", describeItem(completedItem));
+          appendLog(run, completedItem.type === "error" ? "warning" : "info", describeItem(completedItem));
           break;
         }
         case "error":
-          turn.status = "failed";
-          turn.error = evt.message as string;
-          appendLog(run, "error", turn.error);
+          appendLog(run, "warning", String(evt.message ?? ""));
           break;
         default:
           break;
@@ -1213,12 +1247,9 @@ export async function executeRun(
         return;
       }
 
-      turn.status = turn.error ? "failed" : "completed";
-      turn.completedAt ||= nowIso();
-      if (!turn.error) {
-        appendLog(run, "info", "Run completed.");
-      }
-      syncRunDerivedState(run);
+      finalizeStreamedTurn(run, turn, {
+        completedMessage: "Run completed.",
+      });
     });
 
     releaseRunExecution(store, batchId, runId, execution);
@@ -1233,11 +1264,11 @@ export async function executeRun(
         return;
       }
 
-      turn.status = cancelled ? "cancelled" : "failed";
-      turn.completedAt = nowIso();
-      turn.error = cancelled ? "Batch cancelled." : (error as Error).message;
-      appendLog(run, cancelled ? "warning" : "error", turn.error);
-      syncRunDerivedState(run);
+      finalizeStreamedTurn(run, turn, {
+        completedMessage: "Run completed.",
+        cancelled,
+        streamErrorMessage: cancelled ? null : (error as Error).message,
+      });
     });
     releaseRunExecution(store, batchId, runId, execution);
     void refreshRunReview(store, batchId, runId, worktreePath, baseRef);
@@ -1508,12 +1539,9 @@ async function resumeRunWithPrompt(
           return;
         }
 
-        turn.status = turn.error ? "failed" : "completed";
-        turn.completedAt ||= nowIso();
-        if (!turn.error) {
-          appendLog(run, "info", "Follow-up turn completed.");
-        }
-        syncRunDerivedState(run);
+        finalizeStreamedTurn(run, turn, {
+          completedMessage: "Follow-up turn completed.",
+        });
       });
 
       releaseRunExecution(store, batchId, runId, execution);
@@ -1528,11 +1556,11 @@ async function resumeRunWithPrompt(
           return;
         }
 
-        turn.status = cancelled ? "cancelled" : "failed";
-        turn.completedAt = nowIso();
-        turn.error = cancelled ? "Batch cancelled." : (error as Error).message;
-        appendLog(run, cancelled ? "warning" : "error", turn.error);
-        syncRunDerivedState(run);
+        finalizeStreamedTurn(run, turn, {
+          completedMessage: "Follow-up turn completed.",
+          cancelled,
+          streamErrorMessage: cancelled ? null : (error as Error).message,
+        });
       });
 
       releaseRunExecution(store, batchId, runId, execution);
