@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 
-import { buildCodexTurnConfig, createRunId } from "./runner";
+import { buildCodexTurnConfig, continueRun, createRunId } from "./runner";
 import { buildReviewPrompt } from "./workflows/ranked";
+import { buildMockBatch, buildMockRun, buildMockStore } from "./workflows/test-helpers";
 import type { Batch } from "../types";
 
 test("createRunId returns a stable run id derived from the run index", () => {
@@ -85,6 +86,7 @@ test("buildCodexTurnConfig captures developer prompt and session settings", () =
       sandboxMode: "workspace-write",
       approvalPolicy: "never",
       workingDirectory: "/repo/worktrees/run-1/project",
+      additionalDirectories: ["/repo/worktrees/run-1", "/repo/worktrees/run-2"],
       networkAccessEnabled: false,
       webSearchEnabled: false,
       webSearchMode: "disabled",
@@ -102,10 +104,24 @@ test("buildCodexTurnConfig captures developer prompt and session settings", () =
     sandboxMode: "workspace-write",
     approvalPolicy: "never",
     workingDirectory: "/repo/worktrees/run-1/project",
+    additionalDirectories: ["/repo/worktrees/run-1", "/repo/worktrees/run-2"],
     networkAccessEnabled: false,
     webSearchEnabled: false,
     webSearchMode: "disabled",
     modelReasoningEffort: "high",
   });
   expect(config.resumeThreadId).toBeNull();
+});
+
+test("continueRun rejects validated batches", async () => {
+  const batch = buildMockBatch({ mode: "validated" });
+  const run = buildMockRun({ id: "run-1", kind: "candidate", status: "completed" });
+  run.threadId = "thread-1";
+  run.workingDirectory = "/repo/worktrees/run-1/project";
+  batch.runs = [run];
+  const store = buildMockStore(batch);
+
+  await expect(continueRun(store, batch.id, run.id, "Follow up")).rejects.toThrow(
+    "Validated batches are read-only and cannot accept follow-up turns.",
+  );
 });

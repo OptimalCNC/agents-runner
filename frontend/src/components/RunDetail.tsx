@@ -52,7 +52,7 @@ export function RunDetail({ run }: Props) {
   const activePanel = useAppStore((state) => state.activeTab);
 
   const workflow = selectedBatch ? getWorkflowUI(selectedBatch.mode) : null;
-  const rankedSessionReadOnly = workflow?.isSessionReadOnly ?? false;
+  const sessionReadOnly = workflow?.isSessionReadOnly ?? false;
   const showReviewPanel = run ? (workflow?.showReviewTab(run) ?? true) : true;
 
   useEffect(() => {
@@ -162,7 +162,7 @@ export function RunDetail({ run }: Props) {
 
       <div className="run-detail-content">
         {activePanel === "session" && selectedBatchId && (
-          <SessionPanel batchId={selectedBatchId} run={run} readOnly={rankedSessionReadOnly} />
+          <SessionPanel batchId={selectedBatchId} run={run} readOnly={sessionReadOnly} />
         )}
         {activePanel === "review" && showReviewPanel && (
           <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading review...</div>}>

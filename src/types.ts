@@ -105,6 +105,7 @@ export interface CodexSessionConfig {
   sandboxMode: string;
   approvalPolicy: string;
   workingDirectory: string;
+  additionalDirectories: string[];
   networkAccessEnabled: boolean;
   webSearchEnabled: boolean;
   webSearchMode: string;
@@ -153,7 +154,7 @@ export interface Run {
   turns: RunTurn[];
   items: StreamItem[];
   review: RunReview | null;
-  kind?: "candidate" | "reviewer";
+  kind?: "candidate" | "reviewer" | "validator";
   score?: number | null;
   rank?: number | null;
   reviewedRunId?: string | null;
@@ -239,7 +240,7 @@ export type StreamItem =
 
 // --- Batch ---
 
-export type BatchMode = "repeated" | "generated" | "ranked";
+export type BatchMode = "repeated" | "generated" | "ranked" | "validated";
 
 export interface Batch {
   id: string;
@@ -397,6 +398,17 @@ export interface SubmitScoreToolResult {
   reviewedRunId: string;
   score: number;
   reason: string;
+}
+
+export interface SubmitResultToolFile {
+  path: string;
+  explanation: string;
+}
+
+export interface SubmitResultToolResult {
+  workingFolder: string;
+  runId: string;
+  files: SubmitResultToolFile[];
 }
 
 // --- Codex models ---

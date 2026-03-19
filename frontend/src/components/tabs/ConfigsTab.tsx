@@ -55,8 +55,9 @@ function humanizeConfigKey(key: string): string {
     .join(" ");
 }
 
-function buildSessionDetails(config: CodexTurnConfig): DetailItem[] {
-  return [
+export function buildSessionDetails(config: CodexTurnConfig): DetailItem[] {
+  const additionalDirectories = config.sessionConfig.additionalDirectories || [];
+  const items: DetailItem[] = [
     { label: "Model", value: formatOptional(config.sessionConfig.model), mono: true },
     { label: "Sandbox", value: config.sessionConfig.sandboxMode, mono: true },
     { label: "Approval", value: config.sessionConfig.approvalPolicy, mono: true },
@@ -66,6 +67,17 @@ function buildSessionDetails(config: CodexTurnConfig): DetailItem[] {
     { label: "Search Mode", value: config.sessionConfig.webSearchMode, mono: true },
     { label: "Reasoning", value: formatOptional(config.sessionConfig.modelReasoningEffort) },
   ];
+
+  if (additionalDirectories.length > 0) {
+    items.push({
+      label: "Additional Directories",
+      value: additionalDirectories.join("\n"),
+      mono: true,
+      multiline: true,
+    });
+  }
+
+  return items;
 }
 
 function buildClientConfigDetails(config: CodexTurnConfig): DetailItem[] {

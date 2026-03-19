@@ -86,6 +86,7 @@ export function ReviewTab({ run }: Props) {
   }, [files]);
   const hasLocalChanges = Boolean(review?.statusShort.trim());
   const runIsActive = isPendingRunStatus(run.status);
+  const followUpsDisabled = batch?.mode === "validated";
   const branchState = !review
     ? "unknown"
     : review.currentBranch
@@ -98,6 +99,7 @@ export function ReviewTab({ run }: Props) {
     && branchName.trim().length > 0;
   const canRequestCommit =
     Boolean(run.threadId && run.workingDirectory)
+    && !followUpsDisabled
     && !runIsActive
     && Boolean(review)
     && hasLocalChanges
@@ -122,6 +124,8 @@ export function ReviewTab({ run }: Props) {
         : "A worktree has not been created for this run yet.";
   const commitHint = !run.threadId || !run.workingDirectory
     ? "This run needs a Codex thread and working directory before it can receive a commit request."
+    : followUpsDisabled
+      ? "Validated batches are read-only after launch, so commit follow-up turns are disabled."
     : runIsActive
       ? "Wait for the current turn to finish before sending a commit request."
       : !review

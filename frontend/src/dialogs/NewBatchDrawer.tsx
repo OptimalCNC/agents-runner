@@ -36,7 +36,7 @@ function closeDrawer() {
   document.body.style.overflow = "";
 }
 
-const DEFAULT_REVIEW_PROMPT = "Review the implementation on the task branch against the base branch. Score it from 0 to 100, prioritizing correctness, task completion, code quality, and regression risk. Penalize incomplete work, broken behavior, and unnecessary changes.";
+export const DEFAULT_RANKED_REVIEW_PROMPT = "Review the implementation on the task branch against the base branch. Score it from 0 to 100, prioritizing correctness, task completion, code quality, and regression risk. Penalize incomplete work, broken behavior, and unnecessary changes.";
 
 interface InitialDrawerState {
   mode: BatchMode;
@@ -56,6 +56,18 @@ interface InitialDrawerState {
   webSearch: boolean;
 }
 
+export function getDefaultReviewPrompt(mode: BatchMode): string {
+  return mode === "ranked" ? DEFAULT_RANKED_REVIEW_PROMPT : "";
+}
+
+export function resolveReviewPromptForModeChange(currentMode: BatchMode, nextMode: BatchMode, reviewPrompt: string): string {
+  const currentDefault = getDefaultReviewPrompt(currentMode).trim();
+  if (!reviewPrompt.trim() || reviewPrompt.trim() === currentDefault) {
+    return getDefaultReviewPrompt(nextMode);
+  }
+  return reviewPrompt;
+}
+
 function buildDefaultNewBatchDraft(config: AppConfig | null): NewBatchDraft {
   const defaultRunCount = Math.max(1, config?.defaults?.runCount ?? 10);
   return {
@@ -68,7 +80,7 @@ function buildDefaultNewBatchDraft(config: AppConfig | null): NewBatchDraft {
       worktreeRoot: config?.defaults?.worktreeRoot ?? "",
       prompt: "",
       taskPrompt: "",
-      reviewPrompt: DEFAULT_REVIEW_PROMPT,
+      reviewPrompt: getDefaultReviewPrompt("repeated"),
       baseRef: "",
       model: "",
       sandboxMode: config?.defaults?.sandboxMode ?? "workspace-write",
@@ -79,7 +91,7 @@ function buildDefaultNewBatchDraft(config: AppConfig | null): NewBatchDraft {
   };
 }
 
-function buildInitialDrawerState(config: AppConfig | null, draft: NewBatchDraft | null): InitialDrawerState {
+export function buildInitialDrawerState(config: AppConfig | null, draft: NewBatchDraft | null): InitialDrawerState {
   const source = draft ?? buildDefaultNewBatchDraft(config);
   const runCount = Math.max(1, source.config.runCount || 1);
   const reviewCount = Math.max(1, source.config.reviewCount || 1);
@@ -94,7 +106,7 @@ function buildInitialDrawerState(config: AppConfig | null, draft: NewBatchDraft 
     concurrency: String(concurrency),
     prompt: source.config.prompt,
     taskPrompt: source.config.taskPrompt,
-    reviewPrompt: source.config.reviewPrompt || DEFAULT_REVIEW_PROMPT,
+    reviewPrompt: source.config.reviewPrompt || getDefaultReviewPrompt(source.mode),
     reviewCount: String(reviewCount),
     baseRef: source.config.baseRef,
     model: source.config.model,
@@ -120,7 +132,7 @@ export function NewBatchDrawer() {
   const [concurrency, setConcurrency] = useState("10");
   const [prompt, setPrompt] = useState("");
   const [taskPrompt, setTaskPrompt] = useState("");
-  const [reviewPrompt, setReviewPrompt] = useState(DEFAULT_REVIEW_PROMPT);
+  const [reviewPrompt, setReviewPrompt] = useState(getDefaultReviewPrompt("repeated"));
   const [reviewCount, setReviewCount] = useState("3");
   const [baseRef, setBaseRef] = useState("");
   const [model, setModel] = useState("");
@@ -232,7 +244,9 @@ export function NewBatchDrawer() {
     setConcurrency(String(Math.max(1, Math.min(parsed, max))));
   }
 
-  function handleModeChange(nextMode: "repeated" | "generated" | "ranked") {
+  function handleModeChange(nextMode: BatchMode) {
+    if (nextMode === mode) return;
+    setReviewPrompt((current) => resolveReviewPromptForModeChange(mode, nextMode, current));
     setMode(nextMode);
     syncMaxConcurrency(runCount, nextMode);
   }
@@ -665,7 +679,7 @@ export function NewBatchDrawer() {
                 setConcurrency(String(c?.defaults?.runCount ?? 10));
                 setPrompt("");
                 setTaskPrompt("");
-                setReviewPrompt(DEFAULT_REVIEW_PROMPT);
+                setReviewPrompt(getDefaultReviewPrompt("repeated"));
                 setReviewCount("3");
                 setBaseRef("");
                 setModel("");

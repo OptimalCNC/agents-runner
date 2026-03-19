@@ -218,6 +218,7 @@ interface BuildCodexTurnConfigOptions {
     sandboxMode: string;
     approvalPolicy: string;
     workingDirectory: string;
+    additionalDirectories?: string[];
     networkAccessEnabled: boolean;
     webSearchEnabled: boolean;
     webSearchMode: string;
@@ -233,6 +234,11 @@ export function buildCodexTurnConfig(options: BuildCodexTurnConfigOptions): Code
       ?? clientConfig.developer_instructions
       ?? "",
   ).trim();
+  const additionalDirectories = Array.from(new Set(
+    (options.sessionConfig.additionalDirectories || [])
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean),
+  ));
 
   return {
     launchMode: options.launchMode,
@@ -243,6 +249,7 @@ export function buildCodexTurnConfig(options: BuildCodexTurnConfigOptions): Code
       sandboxMode: options.sessionConfig.sandboxMode,
       approvalPolicy: options.sessionConfig.approvalPolicy,
       workingDirectory: options.sessionConfig.workingDirectory,
+      additionalDirectories,
       networkAccessEnabled: options.sessionConfig.networkAccessEnabled,
       webSearchEnabled: options.sessionConfig.webSearchEnabled,
       webSearchMode: options.sessionConfig.webSearchMode,
@@ -555,7 +562,7 @@ function buildCandidateDeveloperInstructions(branchName: string): string {
 export function buildRunRecord(
   task: GenerationTask,
   index: number,
-  kind: "candidate" | "reviewer" = "candidate",
+  kind: "candidate" | "reviewer" | "validator" = "candidate",
   reviewedRunId: string | null = null,
 ): Run {
   return {
@@ -1042,6 +1049,7 @@ interface ExecuteRunOptions {
   promptOverride?: string;
   sandboxModeOverride?: "workspace-write" | "read-only" | "danger-full-access";
   workingDirectoryOverride?: string;
+  additionalDirectoriesOverride?: string[];
   autoCreateBranch?: boolean;
   developerInstructions?: string;
 }
@@ -1105,6 +1113,11 @@ export async function executeRun(
         ? worktreePath!
         : path.join(worktreePath!, projectContext.relativeProjectPath)
     );
+    const additionalDirectories = Array.from(new Set(
+      (options.additionalDirectoriesOverride || [])
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean),
+    ));
 
     store.updateRun(batchId, runId, (run) => {
       run.worktreePath = worktreePath;
@@ -1135,6 +1148,7 @@ export async function executeRun(
       sandboxMode: options.sandboxModeOverride || batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
       approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
       workingDirectory,
+      additionalDirectories,
       networkAccessEnabled: batch.config.networkAccessEnabled,
       webSearchEnabled: batch.config.webSearchMode !== "disabled",
       webSearchMode: batch.config.webSearchMode as "disabled" | "live",
@@ -1254,7 +1268,7 @@ export async function executeBatch(store: BatchStore, batchId: string): Promise<
     }
 
     const latestBatch = store.getBatch(batchId)!;
-    const candidateRuns = latestBatch.runs.filter((run) => run.kind !== "reviewer");
+    const candidateRuns = latestBatch.runs.filter((run) => run.kind === "candidate");
     await workflow.executeBatchRuns(store, batchId, projectContext, candidateRuns, executeRun);
 
     reconcileSettledBatchRuns(store, batchId);
@@ -1295,6 +1309,10 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
     return null;
   }
 
+  if (batch.mode === "validated") {
+    throw new Error("Validated batches are read-only and cannot accept follow-up turns.");
+  }
+
   if (batch.cancelRequested) {
     throw new Error("This batch has been cancelled and cannot accept new turns.");
   }
@@ -1331,6 +1349,7 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
     sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
     approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
     workingDirectory,
+    additionalDirectories: runSnapshot.turns.at(-1)?.codexConfig?.sessionConfig.additionalDirectories || [],
     networkAccessEnabled: batch.config.networkAccessEnabled,
     webSearchEnabled: batch.config.webSearchMode !== "disabled",
     webSearchMode: batch.config.webSearchMode as "disabled" | "live",

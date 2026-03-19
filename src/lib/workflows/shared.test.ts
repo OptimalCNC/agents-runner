@@ -1,7 +1,17 @@
 import { expect, test } from "bun:test";
 
-import { buildMockReviewerRunWithScore, buildMockReviewerRunWithoutScore } from "./test-helpers";
-import { extractReviewerScoreFromMcp, normalizeMode, normalizeNumericScore } from "./shared";
+import {
+  buildMockReviewerRunWithScore,
+  buildMockReviewerRunWithoutScore,
+  buildMockWorkerRunWithSubmission,
+} from "./test-helpers";
+import {
+  extractLatestWorkerResultSubmissionFromMcp,
+  extractReviewerScoreFromMcp,
+  listWorkerResultSubmissionsFromMcp,
+  normalizeMode,
+  normalizeNumericScore,
+} from "./shared";
 
 // --- normalizeMode ---
 
@@ -9,6 +19,7 @@ test("normalizeMode returns canonical mode strings", () => {
   expect(normalizeMode("repeated")).toBe("repeated");
   expect(normalizeMode("generated")).toBe("generated");
   expect(normalizeMode("ranked")).toBe("ranked");
+  expect(normalizeMode("validated")).toBe("validated");
 });
 
 test("normalizeMode handles legacy aliases", () => {
@@ -68,4 +79,50 @@ test("extractReviewerScoreFromMcp returns null for runs with no turns", () => {
   const reviewRun = buildMockReviewerRunWithoutScore();
   reviewRun.turns = [];
   expect(extractReviewerScoreFromMcp(reviewRun)).toBeNull();
+});
+
+test("listWorkerResultSubmissionsFromMcp extracts completed submit_result calls", () => {
+  const workerRun = buildMockWorkerRunWithSubmission([
+    { path: "src/index.ts", explanation: "Main implementation." },
+    { path: "src/utils.ts", explanation: "Shared helper updates." },
+  ]);
+
+  expect(listWorkerResultSubmissionsFromMcp(workerRun)).toEqual([{
+    workingFolder: "/repo/worktrees/run-1",
+    runId: "run-1",
+    files: [
+      { path: "src/index.ts", explanation: "Main implementation." },
+      { path: "src/utils.ts", explanation: "Shared helper updates." },
+    ],
+  }]);
+});
+
+test("extractLatestWorkerResultSubmissionFromMcp returns the latest completed worker submission", () => {
+  const workerRun = buildMockWorkerRunWithSubmission([
+    { path: "src/index.ts", explanation: "Main implementation." },
+  ]);
+  workerRun.turns[0]!.items.push({
+    id: "item-2",
+    type: "mcp_tool_call",
+    server: "agents-runner-workflow",
+    tool: "submit_result",
+    status: "completed",
+    result: {
+      structured_content: {
+        workingFolder: "/repo/worktrees/run-1",
+        runId: "run-1",
+        files: [
+          { path: "src/final.ts", explanation: "Final corrected implementation." },
+        ],
+      },
+    },
+  });
+
+  expect(extractLatestWorkerResultSubmissionFromMcp(workerRun)).toEqual({
+    workingFolder: "/repo/worktrees/run-1",
+    runId: "run-1",
+    files: [
+      { path: "src/final.ts", explanation: "Final corrected implementation." },
+    ],
+  });
 });

@@ -23,9 +23,10 @@ export function formatStatus(value: string | null | undefined): string {
   return (value ?? "").replace(/-/g, " ");
 }
 
-export function normalizeMode(value: string | null | undefined): "repeated" | "generated" | "ranked" {
+export function normalizeMode(value: string | null | undefined): "repeated" | "generated" | "ranked" | "validated" {
   if (value === "generated" || value === "task-generator") return "generated";
   if (value === "ranked" || value === "reviewed") return "ranked";
+  if (value === "validated") return "validated";
   return "repeated";
 }
 

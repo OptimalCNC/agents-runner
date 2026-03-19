@@ -9,6 +9,7 @@ export type ExecuteRunFn = (
     promptOverride?: string;
     sandboxModeOverride?: "workspace-write" | "read-only" | "danger-full-access";
     workingDirectoryOverride?: string;
+    additionalDirectoriesOverride?: string[];
     autoCreateBranch?: boolean;
     developerInstructions?: string;
   },

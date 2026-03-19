@@ -1,4 +1,4 @@
-import type { Batch, BatchMode, BatchStore, Run, RunTurn } from "../../types";
+import type { Batch, BatchMode, BatchStore, Run, RunTurn, SubmitResultToolFile } from "../../types";
 
 export function buildMockBatch(overrides: {
   mode?: BatchMode;
@@ -49,7 +49,7 @@ export function buildMockBatch(overrides: {
 export function buildMockRun(overrides: {
   id?: string;
   index?: number;
-  kind?: "candidate" | "reviewer";
+  kind?: "candidate" | "reviewer" | "validator";
   reviewedRunId?: string | null;
   score?: number | null;
   rank?: number | null;
@@ -159,6 +159,40 @@ export function buildMockReviewerRunWithoutScore(): Run {
       usage: null,
       codexConfig: null,
       items: [],
+    }],
+  });
+}
+
+export function buildMockWorkerRunWithSubmission(files: SubmitResultToolFile[]): Run {
+  return buildMockRun({
+    id: "run-1",
+    kind: "candidate",
+    turns: [{
+      id: "turn-1",
+      index: 0,
+      prompt: "Do work.",
+      status: "completed",
+      submittedAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:01.000Z",
+      completedAt: "2026-01-01T00:00:05.000Z",
+      finalResponse: "done",
+      error: null,
+      usage: null,
+      codexConfig: null,
+      items: [{
+        id: "item-1",
+        type: "mcp_tool_call",
+        server: "agents-runner-workflow",
+        tool: "submit_result",
+        status: "completed",
+        result: {
+          structured_content: {
+            workingFolder: "/repo/worktrees/run-1",
+            runId: "run-1",
+            files,
+          },
+        },
+      }],
     }],
   });
 }

@@ -9,6 +9,8 @@ A lightweight web UI for running multiple Codex SDK runs in parallel, each isola
 3. **Workflow-oriented batch processing** &mdash; Batches are the core unit. Current workflows:
    - **Repeated**: Same prompt dispatched to N parallel agents.
    - **Generated**: A meta-prompt produces N distinct tasks, each executed by its own agent.
+   - **Ranked**: Candidate runs are reviewed and scored by read-only reviewer runs.
+   - **Validated**: N worker runs execute the same task, then one read-only validator inspects all worker results and worktrees.
    - Future: Multi-stage pipelines (e.g., Generate &rarr; Execute &rarr; Score &rarr; Rank).
 4. **Developer-extensible, not user-configurable** &mdash; Users don't build workflows via the UI. Instead, they clone the repo, launch a coding agent, and ask it to implement custom workflows by modifying the source code. The codebase is organized to make this easy.
 
@@ -42,7 +44,7 @@ Agents Runner uses the Codex SDK, which needs credentials to talk to a model pro
 1. **Pick a project** &mdash; select any git repository (or a subdirectory within one). The app validates it and detects the branch and HEAD commit.
 2. **Configure the batch** &mdash; choose a mode, set the number of runs and concurrency, write your prompt, and optionally tune model and sandbox settings.
 3. **Start** &mdash; the app creates isolated git worktrees and launches runs in parallel. Progress streams back in real time.
-4. **Review and continue** &mdash; inspect each run in the coding-agent workspace, including session activity, streamed activity, git changes, and logs, then continue the same Codex thread with follow-up messages when needed.
+4. **Review and continue** &mdash; inspect each run in the coding-agent workspace, including session activity, streamed activity, git changes, and logs. Workflows that permit follow-ups can continue the same Codex thread with new messages.
 
 ## Configuration
 

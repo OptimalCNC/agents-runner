@@ -4,7 +4,7 @@ This document describes the workflow module system and how to add new workflow m
 
 ## Overview
 
-Each batch mode (`"repeated"`, `"generated"`, `"ranked"`) is implemented as a self-contained **workflow module** in `src/lib/workflows/`. Workflow modules implement the `WorkflowDefinition` interface and are registered in a central registry. The runner (`src/lib/runner.ts`) is a generic orchestrator that delegates all mode-specific decisions to the active workflow.
+Each batch mode (`"repeated"`, `"generated"`, `"ranked"`, `"validated"`) is implemented as a self-contained **workflow module** in `src/lib/workflows/`. Workflow modules implement the `WorkflowDefinition` interface and are registered in a central registry. The runner (`src/lib/runner.ts`) is a generic orchestrator that delegates all mode-specific decisions to the active workflow.
 
 ## Directory Structure
 
@@ -16,6 +16,7 @@ src/lib/workflows/
   repeated.ts     -- "repeated" workflow implementation
   generated.ts    -- "generated" workflow implementation (moves buildTaskSchema, generateTasks, etc.)
   ranked.ts       -- "ranked" workflow implementation (moves scoring, reviewer logic, scheduler)
+  validated.ts    -- "validated" workflow implementation (workers + final validator)
   test-helpers.ts -- Test utilities: mock stores, batches, runs
   *.test.ts       -- Per-workflow and registry unit tests
 ```
@@ -24,8 +25,8 @@ src/lib/workflows/
 
 ```typescript
 interface WorkflowDefinition {
-  mode: BatchMode; // "repeated" | "generated" | "ranked"
-  label: string; // Display name: "Repeated", "Generated", "Ranked"
+  mode: BatchMode; // "repeated" | "generated" | "ranked" | "validated"
+  label: string; // Display name: "Repeated", "Generated", "Ranked", "Validated"
 
   // Validate prompt fields before batch creation (throw on invalid)
   validatePayload(p: {
@@ -46,7 +47,7 @@ interface WorkflowDefinition {
   // Create the task list from batch config (may call Codex for generated mode)
   createTasks(store, batchId, projectContext): Promise<GenerationTask[]>;
 
-  // Execute all candidate runs (and reviewer runs for ranked)
+  // Execute all candidate runs plus any workflow-specific follow-up runs
   executeBatchRuns(
     store,
     batchId,
@@ -90,13 +91,13 @@ The following functions are exported from `runner.ts` for use by workflow module
 In `src/types.ts`:
 
 ```typescript
-export type BatchMode = "repeated" | "generated" | "ranked" | "yourmode";
+export type BatchMode = "repeated" | "generated" | "ranked" | "validated" | "yourmode";
 ```
 
 In `frontend/src/types.ts` (frontend copy):
 
 ```typescript
-export type BatchMode = "repeated" | "generated" | "ranked" | "yourmode";
+export type BatchMode = "repeated" | "generated" | "ranked" | "validated" | "yourmode";
 ```
 
 ### Step 2: Implement the workflow module
@@ -254,7 +255,7 @@ The `NewBatchDrawer`, `BatchDetail`, `RunDetail`, and `RunCard` components all d
 Create `src/lib/workflows/yourmode.test.ts` testing the pure functions. See `repeated.test.ts` and `generated.test.ts` for examples. Add your mode to the registry guard tests in `registry.test.ts`:
 
 ```typescript
-const ALL_MODES: BatchMode[] = ["repeated", "generated", "ranked", "yourmode"];
+const ALL_MODES: BatchMode[] = ["repeated", "generated", "ranked", "validated", "yourmode"];
 ```
 
 ## Testing Guide

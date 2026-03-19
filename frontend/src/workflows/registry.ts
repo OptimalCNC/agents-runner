@@ -2,12 +2,14 @@ import type { BatchMode } from "../types.js";
 import { repeatedWorkflow } from "./repeated.js";
 import { generatedWorkflow } from "./generated.js";
 import { rankedWorkflow } from "./ranked.js";
+import { validatedWorkflow } from "./validated.js";
 import type { WorkflowUI } from "./types.js";
 
 const workflows = new Map<BatchMode, WorkflowUI>([
   ["repeated", repeatedWorkflow],
   ["generated", generatedWorkflow],
   ["ranked", rankedWorkflow],
+  ["validated", validatedWorkflow],
 ]);
 
 export function getWorkflowUI(mode: BatchMode): WorkflowUI {

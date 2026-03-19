@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import type { BatchMode } from "../../types";
 import { getWorkflow } from "./registry";
 
-const ALL_MODES: BatchMode[] = ["repeated", "generated", "ranked"];
+const ALL_MODES: BatchMode[] = ["repeated", "generated", "ranked", "validated"];
 const REQUIRED_METHODS = [
   "validatePayload",
   "getMaxConcurrency",
@@ -41,10 +41,11 @@ test("each workflow has a non-empty label", () => {
   }
 });
 
-test("only ranked workflow has preCreateCheck", () => {
+test("ranked and validated workflows have preCreateCheck", () => {
   expect(getWorkflow("repeated").preCreateCheck).toBeUndefined();
   expect(getWorkflow("generated").preCreateCheck).toBeUndefined();
   expect(typeof getWorkflow("ranked").preCreateCheck).toBe("function");
+  expect(typeof getWorkflow("validated").preCreateCheck).toBe("function");
 });
 
 test("workflow mode property matches registry key", () => {
