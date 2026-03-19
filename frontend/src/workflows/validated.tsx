@@ -86,7 +86,6 @@ export const validatedWorkflow: WorkflowUI = {
   buildRunsSummaryLabel(batch) { return `${batch.config.runCount} workers · 1 validator`; },
   RunsGrid,
   TasksSection: null,
-  isSessionReadOnly: true,
   showReviewTab(run) { return run.kind !== "validator"; },
   getRunCardExtras(run) {
     return run.kind === "validator" ? { tags: [{ label: "Validator" }] } : null;

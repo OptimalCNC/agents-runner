@@ -226,6 +226,8 @@ export interface Run {
   turns: RunTurn[];
   items: StreamItem[];
   review: RunReview | null;
+  followUpsReopened: boolean;
+  followUpsReopenedAt: string | null;
   kind?: "candidate" | "reviewer" | "validator";
   score?: number | null;
   rank?: number | null;

@@ -49,7 +49,6 @@ export const repeatedWorkflow: WorkflowUI = {
   buildRunsSummaryLabel(batch) { return `${batch.runs.length} / ${batch.config.runCount}`; },
   RunsGrid,
   TasksSection: null,
-  isSessionReadOnly: false,
   showReviewTab() { return true; },
   getRunCardExtras() { return null; },
 };

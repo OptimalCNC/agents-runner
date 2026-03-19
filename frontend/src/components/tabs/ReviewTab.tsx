@@ -8,7 +8,7 @@ import {
   apiGetBundledMcpStatus,
   apiGetRunReview,
   apiInstallBundledMcp,
-  apiRequestRunCommit,
+  apiRequestRunCommitFollowUp,
 } from "../../state/api.js";
 import { AlertIcon, GitIcon, PlayIcon, RefreshIcon, WrenchIcon } from "../../icons.js";
 import { splitDiff } from "../../utils/diffSplitter.js";
@@ -195,7 +195,7 @@ export function ReviewTab({ run }: Props) {
         branchWasCreated = true;
       }
 
-      const payload = await apiRequestRunCommit(batch.id, run.id);
+      const payload = await apiRequestRunCommitFollowUp(batch.id, run.id);
       useAppStore.getState().setBatchDetail(payload.batch);
       useAppStore.getState().selectTab("session");
       useAppStore.getState().addToast(

@@ -87,6 +87,8 @@ function makeBatch(id: string, projectPath: string, runIds: string[]): Batch {
       turns: [],
       items: [],
       review: null,
+      followUpsReopened: false,
+      followUpsReopenedAt: null,
     })),
   };
 }

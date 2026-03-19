@@ -2,6 +2,7 @@ import type { RunStatus } from "../types.js";
 
 const activeRunStatuses = new Set<RunStatus>(["preparing", "waiting_for_codex", "running"]);
 const pendingRunStatuses = new Set<RunStatus>(["queued", "preparing", "waiting_for_codex", "running"]);
+const terminalRunStatuses = new Set<RunStatus>(["completed", "failed", "cancelled"]);
 
 const statusLabels: Record<string, string> = {
   queued: "Queued",
@@ -20,6 +21,10 @@ export function isActiveRunStatus(status: string | null | undefined): status is 
 
 export function isPendingRunStatus(status: string | null | undefined): status is RunStatus {
   return Boolean(status && pendingRunStatuses.has(status as RunStatus));
+}
+
+export function isTerminalRunStatus(status: string | null | undefined): status is RunStatus {
+  return Boolean(status && terminalRunStatuses.has(status as RunStatus));
 }
 
 export function formatStatusLabel(status: string | null | undefined): string {

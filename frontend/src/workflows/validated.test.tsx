@@ -23,6 +23,8 @@ function buildRun(overrides: Partial<Run> = {}): Run {
     turns: overrides.turns ?? [],
     items: overrides.items ?? [],
     review: overrides.review ?? null,
+    followUpsReopened: overrides.followUpsReopened ?? false,
+    followUpsReopenedAt: overrides.followUpsReopenedAt ?? null,
     kind: overrides.kind ?? "candidate",
     score: overrides.score ?? null,
     rank: overrides.rank ?? null,
@@ -73,8 +75,7 @@ test("validated workflow summary label reflects workers and validator", () => {
   expect(validatedWorkflow.buildRunsSummaryLabel(batch)).toBe("2 workers · 1 validator");
 });
 
-test("validated workflow keeps sessions read-only and hides review tab for validator runs", () => {
-  expect(validatedWorkflow.isSessionReadOnly).toBe(true);
+test("validated workflow hides review tab for validator runs", () => {
   expect(validatedWorkflow.showReviewTab(buildRun({ kind: "candidate" }))).toBe(true);
   expect(validatedWorkflow.showReviewTab(buildRun({ kind: "validator" }))).toBe(false);
 });

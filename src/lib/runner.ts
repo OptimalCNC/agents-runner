@@ -13,6 +13,10 @@ import {
   removeBranch,
   removeWorktree,
 } from "./git";
+import {
+  getContinueRunBlockedReason,
+  getReopenFollowUpsError,
+} from "./followUps";
 import { isAbortError } from "./process";
 import { isRunPendingStatus, isRunTerminalStatus } from "./runStatus";
 import { getWorkflow } from "./workflows/registry";
@@ -51,7 +55,22 @@ interface ExecutionState {
   runControllers: Map<string, AbortController>;
 }
 
+interface CodexThreadHandle {
+  run(prompt: string, options?: object): Promise<{ finalResponse: string }>;
+  runStreamed(prompt: string, options?: object): Promise<{ events: AsyncIterable<unknown> }>;
+}
+
+interface CodexClientHandle {
+  startThread(sessionConfig: object): CodexThreadHandle;
+  resumeThread(threadId: string, sessionConfig: object): CodexThreadHandle;
+}
+
 const executionRegistry = new Map<string, ExecutionState>();
+let codexClientFactory = (config?: Record<string, unknown>): CodexClientHandle => new Codex({
+  apiKey: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
+  baseUrl: process.env.OPENAI_BASE_URL || process.env.CODEX_BASE_URL,
+  config: (config || {}) as never,
+}) as unknown as CodexClientHandle;
 
 export function nowIso(): string {
   return new Date().toISOString();
@@ -137,12 +156,18 @@ function appendLog(run: Run, level: string, message: string): void {
   }
 }
 
-export function getCodexClient(config: Record<string, unknown> = {}): InstanceType<typeof Codex> {
-  return new Codex({
+export function setCodexClientFactoryForTests(
+  factory: ((config?: Record<string, unknown>) => CodexClientHandle) | null,
+): void {
+  codexClientFactory = factory || ((config?: Record<string, unknown>) => new Codex({
     apiKey: process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY,
     baseUrl: process.env.OPENAI_BASE_URL || process.env.CODEX_BASE_URL,
-    config: config as never,
-  });
+    config: (config || {}) as never,
+  }) as unknown as CodexClientHandle);
+}
+
+export function getCodexClient(config: Record<string, unknown> = {}): CodexClientHandle {
+  return codexClientFactory(config);
 }
 
 export function getExecutionState(batchId: string): ExecutionState {
@@ -584,6 +609,8 @@ export function buildRunRecord(
     turns: [buildRunTurn(task.prompt, index, 0)],
     items: [],
     review: null,
+    followUpsReopened: false,
+    followUpsReopenedAt: null,
     kind,
     score: null,
     rank: null,
@@ -1309,10 +1336,6 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
     return null;
   }
 
-  if (batch.mode === "validated") {
-    throw new Error("Validated batches are read-only and cannot accept follow-up turns.");
-  }
-
   if (batch.cancelRequested) {
     throw new Error("This batch has been cancelled and cannot accept new turns.");
   }
@@ -1322,11 +1345,37 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
     throw new Error("Run not found.");
   }
 
-  if (runSnapshot.kind === "reviewer") {
-    throw new Error("Reviewer runs are read-only and cannot be continued.");
+  const blockedReason = getContinueRunBlockedReason(batch, runSnapshot);
+  if (blockedReason) {
+    throw new Error(blockedReason);
   }
 
   return resumeRunWithPrompt(store, batch, runSnapshot, prompt);
+}
+
+export async function reopenRunFollowUps(store: BatchStore, batchId: string, runId: string): Promise<Batch | null> {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
+  }
+
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  if (!runSnapshot) {
+    throw new Error("Run not found.");
+  }
+
+  const reopenError = getReopenFollowUpsError(batch, runSnapshot);
+  if (reopenError) {
+    throw new Error(reopenError);
+  }
+
+  store.updateRun(batchId, runId, (run) => {
+    run.followUpsReopened = true;
+    run.followUpsReopenedAt = nowIso();
+    appendLog(run, "info", "Manual follow-up turns enabled.");
+  });
+
+  return store.getBatch(batchId);
 }
 
 export async function requestRunCommitFollowUp(store: BatchStore, batchId: string, runId: string): Promise<Batch | null> {
@@ -1367,6 +1416,27 @@ function buildCommitFollowUpPrompt(): string {
   ].join("\n\n");
 }
 
+type SessionConfig = CodexTurnConfig["sessionConfig"];
+
+function buildResumeSessionConfig(batch: Batch, runSnapshot: Run): SessionConfig {
+  const previousSessionConfig = getLatestRunTurn(runSnapshot)?.codexConfig?.sessionConfig;
+
+  return {
+    model: previousSessionConfig?.model || batch.config.model || null,
+    sandboxMode: previousSessionConfig?.sandboxMode
+      || (batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access"),
+    approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
+    workingDirectory: previousSessionConfig?.workingDirectory || runSnapshot.workingDirectory || "",
+    additionalDirectories: previousSessionConfig?.additionalDirectories || [],
+    networkAccessEnabled: previousSessionConfig?.networkAccessEnabled ?? batch.config.networkAccessEnabled,
+    webSearchEnabled: previousSessionConfig?.webSearchEnabled ?? batch.config.webSearchMode !== "disabled",
+    webSearchMode: previousSessionConfig?.webSearchMode || (batch.config.webSearchMode as "disabled" | "live"),
+    modelReasoningEffort:
+      previousSessionConfig?.modelReasoningEffort
+      || ((batch.config.reasoningEffort || null) as "low" | "medium" | "high" | null),
+  };
+}
+
 async function resumeRunWithPrompt(
   store: BatchStore,
   batch: Batch,
@@ -1393,17 +1463,7 @@ async function resumeRunWithPrompt(
     throw new Error("This run is already active.");
   }
 
-  const sessionConfig = {
-    model: batch.config.model || undefined,
-    sandboxMode: batch.config.sandboxMode as "workspace-write" | "read-only" | "danger-full-access",
-    approvalPolicy: NON_INTERACTIVE_APPROVAL_POLICY,
-    workingDirectory,
-    additionalDirectories: runSnapshot.turns.at(-1)?.codexConfig?.sessionConfig.additionalDirectories || [],
-    networkAccessEnabled: batch.config.networkAccessEnabled,
-    webSearchEnabled: batch.config.webSearchMode !== "disabled",
-    webSearchMode: batch.config.webSearchMode as "disabled" | "live",
-    modelReasoningEffort: (batch.config.reasoningEffort || undefined) as "low" | "medium" | "high" | undefined,
-  };
+  const sessionConfig = buildResumeSessionConfig(batch, runSnapshot);
   const nextTurn = buildRunTurn(prompt, runSnapshot.index, runSnapshot.turns.length);
   nextTurn.status = "waiting_for_codex";
   nextTurn.codexConfig = buildCodexTurnConfig({

@@ -126,7 +126,16 @@ export async function apiContinueRun(batchId: string, runId: string, prompt: str
   );
 }
 
-export async function apiRequestRunCommit(batchId: string, runId: string): Promise<{ batch: Batch }> {
+export async function apiReopenRunFollowUps(batchId: string, runId: string): Promise<{ batch: Batch }> {
+  return fetchJson<{ batch: Batch }>(
+    `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/follow-ups/reopen`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export async function apiRequestRunCommitFollowUp(batchId: string, runId: string): Promise<{ batch: Batch }> {
   return fetchJson<{ batch: Batch }>(
     `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/commit`,
     {

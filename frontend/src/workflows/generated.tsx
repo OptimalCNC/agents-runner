@@ -74,7 +74,6 @@ export const generatedWorkflow: WorkflowUI = {
   buildRunsSummaryLabel(batch) { return `${batch.runs.length} / ${batch.config.runCount}`; },
   RunsGrid,
   TasksSection,
-  isSessionReadOnly: false,
   showReviewTab() { return true; },
   getRunCardExtras() { return null; },
 };

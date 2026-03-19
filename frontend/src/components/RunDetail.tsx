@@ -52,7 +52,6 @@ export function RunDetail({ run }: Props) {
   const activePanel = useAppStore((state) => state.activeTab);
 
   const workflow = selectedBatch ? getWorkflowUI(selectedBatch.mode) : null;
-  const sessionReadOnly = workflow?.isSessionReadOnly ?? false;
   const showReviewPanel = run ? (workflow?.showReviewTab(run) ?? true) : true;
 
   useEffect(() => {
@@ -146,6 +145,13 @@ export function RunDetail({ run }: Props) {
       </div>
 
       {run.error && <div className="run-detail-alert run-detail-alert-danger">{run.error}</div>}
+      {run.followUpsReopened && (
+        <div className="run-detail-alert run-detail-alert-info">
+          Follow-ups were reopened manually
+          {run.followUpsReopenedAt ? ` on ${formatDate(run.followUpsReopenedAt)}` : ""}.
+          Review results shown for this run may now be stale.
+        </div>
+      )}
 
       <div className="run-detail-tabs">
         {panels.map((panel) => (
@@ -161,8 +167,8 @@ export function RunDetail({ run }: Props) {
       </div>
 
       <div className="run-detail-content">
-        {activePanel === "session" && selectedBatchId && (
-          <SessionPanel batchId={selectedBatchId} run={run} readOnly={sessionReadOnly} />
+        {activePanel === "session" && selectedBatchId && selectedBatch && (
+          <SessionPanel batchId={selectedBatchId} batch={selectedBatch} run={run} />
         )}
         {activePanel === "review" && showReviewPanel && (
           <Suspense fallback={<div className="tab-panel text-muted text-sm">Loading review...</div>}>

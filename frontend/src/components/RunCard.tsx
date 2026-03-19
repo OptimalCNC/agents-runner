@@ -30,11 +30,12 @@ export function RunCard({ run, extras }: Props) {
         <div className="run-card-title">{run.title}</div>
         <StatusPill status={run.status} />
       </div>
-      {(reviewSummary || tags.length > 0 || scoreLabel || rankLabel) && (
+      {(reviewSummary || tags.length > 0 || scoreLabel || rankLabel || run.followUpsReopened) && (
         <div className="tag-row">
           {tags.map((tag, i) => (
             <span key={i} className={tag.className ? `tag ${tag.className}` : "tag"}>{tag.label}</span>
           ))}
+          {run.followUpsReopened && <span className="tag tag-info">Follow-ups reopened</span>}
           {rankLabel && <span className="tag">{rankLabel}</span>}
           {scoreLabel && <span className="tag">{scoreLabel}</span>}
           {reviewSummary && <span className="tag">{reviewSummary}</span>}

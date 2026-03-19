@@ -49,6 +49,7 @@ export function buildMockBatch(overrides: {
 export function buildMockRun(overrides: {
   id?: string;
   index?: number;
+  title?: string;
   kind?: "candidate" | "reviewer" | "validator";
   reviewedRunId?: string | null;
   score?: number | null;
@@ -56,11 +57,13 @@ export function buildMockRun(overrides: {
   status?: string;
   review?: { currentBranch: string | null } | null;
   turns?: RunTurn[];
+  followUpsReopened?: boolean;
+  followUpsReopenedAt?: string | null;
 }): Run {
   return {
     id: overrides.id ?? "run-1",
     index: overrides.index ?? 0,
-    title: "Run 1",
+    title: overrides.title ?? "Run 1",
     prompt: "Do work.",
     status: (overrides.status ?? "queued") as Run["status"],
     startedAt: null,
@@ -99,6 +102,8 @@ export function buildMockRun(overrides: {
       trackedDiff: "",
       untrackedFiles: [],
     } : null,
+    followUpsReopened: overrides.followUpsReopened ?? false,
+    followUpsReopenedAt: overrides.followUpsReopenedAt ?? null,
     kind: overrides.kind ?? "candidate",
     score: overrides.score ?? null,
     rank: overrides.rank ?? null,

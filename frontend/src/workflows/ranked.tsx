@@ -186,7 +186,6 @@ export const rankedWorkflow: WorkflowUI = {
   },
   RunsGrid,
   TasksSection: null,
-  isSessionReadOnly: true,
   showReviewTab(run) { return run.kind !== "reviewer"; },
   getRunCardExtras(run) {
     const scoreLabel = run.score == null

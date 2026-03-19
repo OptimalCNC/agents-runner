@@ -40,7 +40,6 @@ export interface WorkflowUI {
   TasksSection: ComponentType<{ batch: Batch }> | null;
 
   // RunDetail
-  isSessionReadOnly: boolean;
   showReviewTab(run: Run): boolean;
 
   // RunCard

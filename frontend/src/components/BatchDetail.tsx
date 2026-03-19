@@ -4,6 +4,7 @@ import { StatusPill } from "./StatusPill.js";
 import { RunDetail } from "./RunDetail.js";
 import { ClockIcon, FolderIcon, GitIcon, XIcon, RefreshIcon } from "../icons.js";
 import { formatDate, formatRelative, formatModeLabel } from "../utils/format.js";
+import { hasManualFollowUpOverrides } from "../utils/followUps.js";
 import { summarizeRunCounts } from "../utils/runStatus.js";
 import { getWorkflowUI } from "../workflows/registry.js";
 import type { Batch, NewBatchDraft } from "../types.js";
@@ -51,6 +52,10 @@ export function BatchDetail() {
   const queuedRuns = selectedBatch.runs.filter((r) => r.status === "queued").length;
 
   const workflow = getWorkflowUI(selectedBatch.mode);
+  const hasFollowUpOverrides = hasManualFollowUpOverrides(selectedBatch);
+  const followUpWarningCopy = selectedBatch.mode === "ranked"
+    ? "Manual follow-ups were reopened on this batch. Existing reviewer scores and ranks may now be stale."
+    : "Manual follow-ups were reopened on this batch. Existing validator output may now be stale.";
 
   async function handleCancel() {
     try {
@@ -128,6 +133,11 @@ export function BatchDetail() {
       {selectedBatch.error && (
         <div style={{ padding: "10px 14px", background: "var(--danger-soft)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "var(--radius-sm)", color: "var(--danger)", fontSize: "13px", marginBottom: "24px" }}>
           {selectedBatch.error}
+        </div>
+      )}
+      {hasFollowUpOverrides && (
+        <div className="run-detail-alert run-detail-alert-warning">
+          {followUpWarningCopy}
         </div>
       )}
 

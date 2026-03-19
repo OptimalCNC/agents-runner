@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { apiContinueRun } from "../state/api.js";
+import { apiContinueRun, apiReopenRunFollowUps } from "../state/api.js";
 import { useAppStore } from "../state/store.js";
-import type { Run, RunTurn, StreamItem } from "../types.js";
+import type { Batch, Run, RunTurn, StreamItem } from "../types.js";
 import { formatDate } from "../utils/format.js";
+import { getFollowUpState } from "../utils/followUps.js";
 import { renderMarkdown } from "../utils/markdown.js";
 import { isPendingRunStatus } from "../utils/runStatus.js";
 import { BotIcon, PlayIcon, ChevronRightIcon } from "../icons.js";
@@ -11,8 +12,8 @@ import { StreamItemView, getStreamItemGroupMeta } from "./StreamItemView.js";
 
 interface Props {
   batchId: string;
+  batch: Batch;
   run: Run;
-  readOnly?: boolean;
 }
 
 type SessionItemEntry =
@@ -170,12 +171,14 @@ function ToolGroup({ items }: { items: StreamItem[] }) {
   );
 }
 
-export function SessionPanel({ batchId, run, readOnly = false }: Props) {
+export function SessionPanel({ batchId, batch, run }: Props) {
   const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [reopening, setReopening] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<RunTurn | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const turns = useMemo(() => getSessionTurns(run), [run]);
+  const followUpState = useMemo(() => getFollowUpState(batch, run), [batch, run]);
   const displayTurns = useMemo(() => {
     if (!submitting || !pendingTurn) {
       return turns;
@@ -187,10 +190,13 @@ export function SessionPanel({ batchId, run, readOnly = false }: Props) {
 
     return alreadyMaterialized ? turns : [...turns, pendingTurn];
   }, [pendingTurn, submitting, turns]);
-  const isRunnable = canContinueRun(run);
+  const isRunnable = followUpState.allowed && canContinueRun(run);
   const isRunActive = isPendingRunStatus(run.status);
-  const composerDisabled = readOnly || submitting || isRunActive || !Boolean(run.threadId && run.workingDirectory);
+  const composerDisabled = submitting || isRunActive || !Boolean(run.threadId && run.workingDirectory);
   const submitLabel = submitting ? "Sending..." : isRunActive ? "Working..." : "Continue Run";
+  const lockedMessage = followUpState.canReopen
+    ? "This workflow keeps open-ended follow-ups closed by default. Enable them to continue this Codex thread."
+    : followUpState.reopenDisabledReason;
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -224,6 +230,23 @@ export function SessionPanel({ batchId, run, readOnly = false }: Props) {
     } finally {
       setPendingTurn(null);
       setSubmitting(false);
+    }
+  }
+
+  async function handleReopenFollowUps() {
+    if (!followUpState.canReopen || reopening) {
+      return;
+    }
+
+    setReopening(true);
+    try {
+      const payload = await apiReopenRunFollowUps(batchId, run.id);
+      useAppStore.getState().setBatchDetail(payload.batch);
+      useAppStore.getState().addToast("success", "Follow-ups enabled", "This run can now accept manual follow-up turns.");
+    } catch (error) {
+      useAppStore.getState().addToast("error", "Enable failed", (error as Error).message);
+    } finally {
+      setReopening(false);
     }
   }
 
@@ -306,7 +329,27 @@ export function SessionPanel({ batchId, run, readOnly = false }: Props) {
         </div>
       </div>
 
-      {!readOnly && (
+      {followUpState.lockedByPolicy ? (
+        <div className="session-composer">
+          <div className="session-followup-lock">
+            <div className="session-followup-lock-title">Follow-ups are closed by default</div>
+            <div className="session-followup-lock-copy">{lockedMessage}</div>
+            <div className="session-followup-lock-actions">
+              <div className="session-composer-hint">
+                {run.workingDirectory || "No working directory yet."}
+              </div>
+              <button
+                className="btn btn-primary session-submit"
+                type="button"
+                disabled={!followUpState.canReopen || reopening}
+                onClick={handleReopenFollowUps}
+              >
+                <PlayIcon size={12} /> {reopening ? "Enabling..." : "Enable Follow-Ups"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
         <form className="session-composer" onSubmit={handleSubmit}>
           <div className="session-composer-shell">
             <textarea
