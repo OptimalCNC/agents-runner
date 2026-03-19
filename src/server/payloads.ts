@@ -3,8 +3,9 @@ import path from "node:path";
 import { DEFAULT_RUN_COUNT, DEFAULT_SANDBOX_MODE } from "./constants";
 import { getWorkflow } from "../lib/workflows/registry";
 import { normalizeMode } from "../lib/workflows/shared";
+import { normalizeClientPlatform } from "../lib/terminal";
 
-import type { BatchMode } from "../types";
+import type { BatchMode, ClientPlatform } from "../types";
 
 const MAX_BATCH_RUN_COUNT = 50;
 
@@ -19,6 +20,13 @@ function normalizeInteger(value: unknown, fallback: number, minimum: number, max
 
 export function normalizeString(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+export function normalizeLaunchTerminalPayload(body: Record<string, unknown>): { path: string; clientPlatform: ClientPlatform } {
+  return {
+    path: normalizeString(body.path),
+    clientPlatform: normalizeClientPlatform(body.clientPlatform),
+  };
 }
 
 function getProjectFolderLabel(projectPath: string): string {
@@ -149,4 +157,3 @@ export function normalizeCreateBranchPayload(body: Record<string, unknown>): { b
 
   return { branchName };
 }
-

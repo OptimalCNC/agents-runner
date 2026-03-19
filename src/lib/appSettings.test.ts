@@ -30,6 +30,9 @@ test("load falls back to empty settings when the settings file is missing", asyn
 
   expect(store.get()).toEqual({
     worktreeRoot: "",
+    terminal: {
+      preference: "auto",
+    },
   });
 });
 
@@ -43,6 +46,9 @@ test("update persists a normalized worktree root", async () => {
 
   expect(saved).toEqual({
     worktreeRoot: path.resolve(relativeRoot),
+    terminal: {
+      preference: "auto",
+    },
   });
 
   const reloadedStore = createAppSettingsStore(dataDirectory);
@@ -60,9 +66,35 @@ test("update allows clearing the saved worktree root", async () => {
 
   expect(cleared).toEqual({
     worktreeRoot: "",
+    terminal: {
+      preference: "auto",
+    },
   });
 
   const reloadedStore = createAppSettingsStore(dataDirectory);
   await reloadedStore.load();
   expect(reloadedStore.get()).toEqual(cleared);
+});
+
+test("update persists the terminal launcher preference", async () => {
+  const dataDirectory = await createTempDataDirectory();
+  const store = createAppSettingsStore(dataDirectory);
+
+  await store.load();
+  const saved = await store.update({
+    terminal: {
+      preference: "windows-terminal",
+    },
+  });
+
+  expect(saved).toEqual({
+    worktreeRoot: "",
+    terminal: {
+      preference: "windows-terminal",
+    },
+  });
+
+  const reloadedStore = createAppSettingsStore(dataDirectory);
+  await reloadedStore.load();
+  expect(reloadedStore.get()).toEqual(saved);
 });

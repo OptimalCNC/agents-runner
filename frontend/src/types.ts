@@ -10,6 +10,16 @@ export type RunStatus =
   | "failed"
   | "cancelled";
 export type GenerationStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type ClientPlatform = "windows" | "macos" | "linux" | "unknown";
+export type TerminalPreference = "auto" | "windows-terminal";
+export type TerminalLauncherId = "windows-terminal";
+
+export interface TerminalLauncherInfo {
+  id: TerminalLauncherId;
+  label: string;
+  supported: boolean;
+  unsupportedReason: string | null;
+}
 
 export interface BatchConfig {
   runCount: number;
@@ -378,6 +388,10 @@ export interface AppConfig {
     runCount: number;
     sandboxMode: string;
     worktreeRoot: string;
+  };
+  terminal: {
+    preference: TerminalPreference;
+    launchers: TerminalLauncherInfo[];
   };
   codexEnvironment: {
     hasOpenAIApiKey: boolean;

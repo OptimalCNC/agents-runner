@@ -16,6 +16,15 @@ const appConfig: AppConfig = {
     sandboxMode: "workspace-write",
     worktreeRoot: "/worktrees",
   },
+  terminal: {
+    preference: "auto",
+    launchers: [{
+      id: "windows-terminal",
+      label: "Windows Terminal",
+      supported: true,
+      unsupportedReason: null,
+    }],
+  },
   codexEnvironment: {
     hasOpenAIApiKey: false,
     hasCodexProfile: true,

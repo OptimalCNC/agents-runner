@@ -9,12 +9,15 @@ import {
   InfoIcon,
   RefreshIcon,
   SettingsIcon,
+  TerminalIcon,
   WrenchIcon,
   XCircleIcon,
 } from "../icons.js";
 import { apiGetBundledMcpStatus, apiInstallBundledMcp, apiUpdateConfig } from "../state/api.js";
 import { useAppStore } from "../state/store.js";
-import type { BundledMcpStatus } from "../types.js";
+import type { AppConfig, BundledMcpStatus } from "../types.js";
+import { detectClientPlatform } from "../utils/clientPlatform.js";
+import { resolveTerminalLaunchState } from "../utils/terminalLaunch.js";
 
 type HealthTone = "healthy" | "warning" | "idle";
 type InlineNoteState = {
@@ -74,9 +77,37 @@ function formatTransport(transport: BundledMcpStatus["transport"]): string {
   return "not configured";
 }
 
+function getTerminalPreferenceLabel(preference: AppConfig["terminal"]["preference"]): string {
+  return preference === "windows-terminal" ? "Windows Terminal" : "Auto";
+}
+
+function getTerminalSummary(config: AppConfig | null, clientPlatform: ReturnType<typeof detectClientPlatform>, note: InlineNoteState): string {
+  if (note?.message) {
+    return note.message;
+  }
+
+  if (!config) {
+    return "Choose how Agents Runner opens a native terminal window for a run folder.";
+  }
+
+  const launchState = resolveTerminalLaunchState(config, clientPlatform, config.homeDirectory || "/");
+  if (config.terminal.preference === "auto") {
+    return launchState.canLaunch
+      ? `Auto currently resolves to ${launchState.effectiveLauncherLabel} for this browser.`
+      : launchState.disabledReason;
+  }
+
+  return launchState.canLaunch
+    ? `${launchState.effectiveLauncherLabel} will be used when you open a run folder in a terminal.`
+    : launchState.disabledReason;
+}
+
 export function SettingsView() {
   const config = useAppStore((s) => s.config);
   const savedWorktreeRoot = config?.defaults?.worktreeRoot ?? "";
+  const savedTerminalPreference = config?.terminal.preference ?? "auto";
+  const clientPlatform = detectClientPlatform();
+  const windowsTerminal = config?.terminal.launchers.find((launcher) => launcher.id === "windows-terminal") ?? null;
 
   const [status, setStatus] = useState<BundledMcpStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,6 +116,9 @@ export function SettingsView() {
   const [defaultWorktreeRoot, setDefaultWorktreeRoot] = useState(savedWorktreeRoot);
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [defaultsNote, setDefaultsNote] = useState<InlineNoteState>(null);
+  const [terminalPreference, setTerminalPreference] = useState<AppConfig["terminal"]["preference"]>(savedTerminalPreference);
+  const [savingTerminal, setSavingTerminal] = useState(false);
+  const [terminalNote, setTerminalNote] = useState<InlineNoteState>(null);
 
   useEffect(() => {
     void loadStatus();
@@ -93,6 +127,10 @@ export function SettingsView() {
   useEffect(() => {
     setDefaultWorktreeRoot(savedWorktreeRoot);
   }, [savedWorktreeRoot]);
+
+  useEffect(() => {
+    setTerminalPreference(savedTerminalPreference);
+  }, [savedTerminalPreference]);
 
   useEffect(() => () => {
     useAppStore.setState({ browserDialogOpen: false });
@@ -171,6 +209,37 @@ export function SettingsView() {
     }
   }
 
+  async function handleSaveTerminal(): Promise<void> {
+    if (!config || savingTerminal) {
+      return;
+    }
+
+    setSavingTerminal(true);
+    setTerminalNote(null);
+
+    try {
+      const nextConfig = await apiUpdateConfig({
+        terminalPreference,
+      });
+
+      useAppStore.setState({ config: nextConfig });
+      setTerminalNote({
+        tone: "success",
+        message: `${getTerminalPreferenceLabel(nextConfig.terminal.preference)} is now the saved terminal launcher preference.`,
+      });
+      useAppStore.getState().addToast("success", "Terminal launcher saved", "Run Details will use the updated launcher preference.");
+    } catch (nextError) {
+      const message = (nextError as Error).message;
+      setTerminalNote({
+        tone: "error",
+        message,
+      });
+      useAppStore.getState().addToast("error", "Failed to save terminal launcher", message);
+    } finally {
+      setSavingTerminal(false);
+    }
+  }
+
   function handleBrowseDefaultWorktree(): void {
     void openBrowser("worktree", defaultWorktreeRoot || savedWorktreeRoot || config?.homeDirectory || "");
   }
@@ -199,6 +268,24 @@ export function SettingsView() {
   const worktreeHealthLabel = savedWorktreeRoot ? "Configured" : "Project Parent";
   const defaultsSummary = defaultsNote?.message
     || "Leave this blank to keep using each project's parent folder. You can still override the worktree root per batch.";
+  const terminalDirty = terminalPreference !== savedTerminalPreference;
+  const terminalProbeConfig = config
+    ? {
+      ...config,
+      terminal: {
+        ...config.terminal,
+        preference: terminalPreference,
+      },
+    }
+    : null;
+  const terminalLaunchState = resolveTerminalLaunchState(terminalProbeConfig, clientPlatform, config?.homeDirectory || "/");
+  const terminalHealthTone: HealthTone = terminalLaunchState.canLaunch ? "healthy" : "warning";
+  const terminalHealthLabel = terminalLaunchState.canLaunch
+    ? "Ready"
+    : windowsTerminal?.supported
+      ? "Needs Windows Browser"
+      : "Unavailable";
+  const terminalSummary = getTerminalSummary(terminalProbeConfig, clientPlatform, terminalNote);
 
   return (
     <div className="settings-page">
@@ -287,6 +374,86 @@ export function SettingsView() {
             </div>
             <span className="form-hint">
               Saved value: {savedWorktreeRoot || "Project parent fallback"}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-card-header">
+          <div className="settings-card-heading">
+            <div className={`settings-health-pill is-${terminalHealthTone}`}>
+              {terminalLaunchState.canLaunch ? <TerminalIcon size={14} /> : <AlertIcon size={14} />}
+              {terminalHealthLabel}
+            </div>
+            <div>
+              <h2>Terminal Launcher</h2>
+              <p>
+                Choose which native terminal app Run Details should launch. Each click opens a new terminal window and Agents Runner does not manage its lifetime.
+              </p>
+            </div>
+          </div>
+          <div className="settings-card-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={() => void handleSaveTerminal()}
+              disabled={!config || savingTerminal || !terminalDirty}
+            >
+              <TerminalIcon size={13} />
+              {savingTerminal ? "Saving..." : "Save Terminal"}
+            </button>
+          </div>
+        </div>
+
+        <div className={`settings-inline-note${terminalNote ? ` is-${terminalNote.tone}` : terminalLaunchState.canLaunch ? " is-success" : " is-warning"}`}>
+          {terminalSummary}
+        </div>
+
+        <div className="settings-detail-grid">
+          <article className="settings-detail-card">
+            <div className="settings-detail-label">Current browser</div>
+            <div className="settings-detail-value">{clientPlatform}</div>
+          </article>
+          <article className="settings-detail-card">
+            <div className="settings-detail-label">Saved preference</div>
+            <div className="settings-detail-value">{getTerminalPreferenceLabel(savedTerminalPreference)}</div>
+          </article>
+          <article className="settings-detail-card">
+            <div className="settings-detail-label">Windows Terminal</div>
+            <div className="settings-detail-value">{windowsTerminal?.supported ? "Available" : windowsTerminal?.unsupportedReason || "Unavailable"}</div>
+          </article>
+        </div>
+
+        <div className="settings-subsection">
+          <div className="settings-subsection-header">
+            <div>
+              <h3>Launcher Preference</h3>
+              <p>
+                Auto uses Windows Terminal only when the page is opened from Windows. You can still force Windows Terminal explicitly.
+              </p>
+            </div>
+            <div className="settings-subsection-icon">
+              {terminalLaunchState.canLaunch ? <TerminalIcon size={18} /> : <AlertIcon size={18} />}
+            </div>
+          </div>
+
+          <div className="form-section">
+            <label className="form-label" htmlFor="terminalPreference">Terminal Application</label>
+            <select
+              id="terminalPreference"
+              name="terminalPreference"
+              value={terminalPreference}
+              onChange={(event) => {
+                setTerminalPreference(event.target.value as AppConfig["terminal"]["preference"]);
+                setTerminalNote(null);
+              }}
+            >
+              <option value="auto">Auto</option>
+              <option value="windows-terminal">Windows Terminal</option>
+            </select>
+            <span className="form-hint">
+              Saved value: {getTerminalPreferenceLabel(savedTerminalPreference)}
             </span>
           </div>
         </div>

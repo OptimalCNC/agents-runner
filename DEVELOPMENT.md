@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide covers local development for Agents Runner. For the product overview and runtime behavior, see [README.md](README.md). For workflow architecture and adding new batch modes, see [WORKFLOWS.md](WORKFLOWS.md).
+This guide covers local development for Agents Runner. For the product overview and runtime behavior, see [README.md](README.md). For workflow architecture and adding new batch modes, see [WORKFLOWS.md](WORKFLOWS.md). For the native terminal launcher architecture and extension points, see [docs/open-in-terminal.md](docs/open-in-terminal.md).
 
 ## Development Principles
 
@@ -65,3 +65,9 @@ Use [WORKFLOWS.md](WORKFLOWS.md) when you need to:
 - understand the workflow registry and module interfaces
 - add a new batch mode
 - update workflow-specific tests
+
+## Feature Guides
+
+Use these guides when you are extending subsystems beyond workflow logic:
+
+- [docs/open-in-terminal.md](docs/open-in-terminal.md): architecture of the native `Open Terminal` feature, launch lifecycle, and how to add a new terminal launcher

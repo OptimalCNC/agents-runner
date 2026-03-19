@@ -4,6 +4,7 @@ import type {
   BatchDeletePreview,
   BatchSummary,
   BundledMcpStatus,
+  ClientPlatform,
   CodexAuthValidationResponse,
   DirectoryListing,
   ModelCatalogResponse,
@@ -41,9 +42,20 @@ export async function apiLoadConfig(): Promise<AppConfig> {
   return fetchJson<AppConfig>("/api/config");
 }
 
-export async function apiUpdateConfig(payload: { worktreeRoot: string }): Promise<AppConfig> {
+export async function apiUpdateConfig(payload: { worktreeRoot?: string; terminalPreference?: AppConfig["terminal"]["preference"] }): Promise<AppConfig> {
   return fetchJson<AppConfig>("/api/config", {
     method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function apiLaunchTerminal(payload: { path: string; clientPlatform: ClientPlatform }): Promise<{
+  launched: boolean;
+  launcherId: string;
+  launcherLabel: string;
+}> {
+  return fetchJson("/api/terminal/launch", {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }

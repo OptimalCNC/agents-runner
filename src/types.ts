@@ -25,6 +25,19 @@ export type GenerationStatus =
   | "failed"
   | "cancelled";
 
+export type ClientPlatform = "windows" | "macos" | "linux" | "unknown";
+
+export type TerminalPreference = "auto" | "windows-terminal";
+
+export type TerminalLauncherId = "windows-terminal";
+
+export interface TerminalLauncherInfo {
+  id: TerminalLauncherId;
+  label: string;
+  supported: boolean;
+  unsupportedReason: string | null;
+}
+
 // --- Batch config ---
 
 export interface BatchConfig {

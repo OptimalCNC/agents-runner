@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { normalizeTerminalPreference } from "./terminal";
+
+import type { TerminalPreference } from "../types";
+
 export interface AppSettings {
   worktreeRoot: string;
+  terminal: {
+    preference: TerminalPreference;
+  };
 }
 
 export interface AppSettingsStore {
@@ -13,11 +20,17 @@ export interface AppSettingsStore {
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
   worktreeRoot: "",
+  terminal: {
+    preference: "auto",
+  },
 };
 
 function cloneSettings(settings: AppSettings): AppSettings {
   return {
     worktreeRoot: settings.worktreeRoot,
+    terminal: {
+      preference: settings.terminal.preference,
+    },
   };
 }
 
@@ -30,9 +43,15 @@ function normalizeAppSettings(value: unknown): AppSettings {
   const record = value && typeof value === "object"
     ? value as Record<string, unknown>
     : {};
+  const terminalRecord = record.terminal && typeof record.terminal === "object"
+    ? record.terminal as Record<string, unknown>
+    : {};
 
   return {
     worktreeRoot: normalizeWorktreeRoot(record.worktreeRoot),
+    terminal: {
+      preference: normalizeTerminalPreference(terminalRecord.preference),
+    },
   };
 }
 
@@ -81,6 +100,10 @@ export function createAppSettingsStore(dataDirectory: string): AppSettingsStore 
       settings = normalizeAppSettings({
         ...settings,
         ...patch,
+        terminal: {
+          ...settings.terminal,
+          ...patch.terminal,
+        },
       });
 
       const snapshot = cloneSettings(settings);

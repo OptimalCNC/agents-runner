@@ -7,6 +7,7 @@ import { handleEventTransportRequest } from "./routes/events";
 import { handleMcpRoutes } from "./routes/mcp";
 import { handleProjectWorktreeRoutes } from "./routes/projects";
 import { handleSystemRoutes } from "./routes/system";
+import { handleTerminalRoutes } from "./routes/terminal";
 
 import type { ServerContext } from "./context";
 
@@ -16,6 +17,7 @@ const apiRouteHandlers: ApiRouteHandler[] = [
   handleMcpRoutes,
   handleBatchRoutes,
   handleProjectWorktreeRoutes,
+  handleTerminalRoutes,
   handleEventTransportRequest,
 ];
 

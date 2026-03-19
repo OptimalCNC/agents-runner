@@ -1,10 +1,14 @@
 import { Suspense, lazy } from "react";
 import { useEffect, useState } from "react";
 import type { Run } from "../types.js";
+import { TerminalIcon } from "../icons.js";
+import { apiLaunchTerminal } from "../state/api.js";
 import { useAppStore, selectSelectedBatch } from "../state/store.js";
 import type { RunDetailTab } from "../state/navigation.js";
 import { getWorkflowUI } from "../workflows/registry.js";
+import { detectClientPlatform } from "../utils/clientPlatform.js";
 import { formatDate } from "../utils/format.js";
+import { getRunTerminalPath, resolveTerminalLaunchState } from "../utils/terminalLaunch.js";
 import { StatusPill } from "./StatusPill.js";
 import { SessionPanel } from "./SessionPanel.js";
 
@@ -47,9 +51,12 @@ function formatUsageSummary(run: Run): string {
 export function RunDetail({ run }: Props) {
   const [configsOpen, setConfigsOpen] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
+  const [launchingTerminal, setLaunchingTerminal] = useState(false);
   const selectedBatchId = useAppStore((state) => state.selectedBatchId);
   const selectedBatch = useAppStore(selectSelectedBatch);
   const activePanel = useAppStore((state) => state.activeTab);
+  const config = useAppStore((state) => state.config);
+  const clientPlatform = detectClientPlatform();
 
   const workflow = selectedBatch ? getWorkflowUI(selectedBatch.mode) : null;
   const showReviewPanel = run ? (workflow?.showReviewTab(run) ?? true) : true;
@@ -79,13 +86,33 @@ export function RunDetail({ run }: Props) {
     );
   }
 
-  const directory = run.workingDirectory || run.worktreePath || "Pending";
+  const terminalPath = getRunTerminalPath(run);
+  const directory = terminalPath || "Pending";
   const usageSummary = formatUsageSummary(run);
   const configCount = run.turns.filter((turn) => Boolean(turn.codexConfig)).length;
+  const terminalLaunchState = resolveTerminalLaunchState(config, clientPlatform, terminalPath);
   const panels: { key: RunDetailTab; label: string }[] = [
     { key: "session", label: "Session" },
     ...(showReviewPanel ? [{ key: "review", label: "Review" } as const] : []),
   ];
+
+  async function handleOpenTerminal(): Promise<void> {
+    if (!terminalLaunchState.canLaunch || launchingTerminal || !terminalPath) {
+      return;
+    }
+
+    setLaunchingTerminal(true);
+    try {
+      await apiLaunchTerminal({
+        path: terminalPath,
+        clientPlatform,
+      });
+    } catch (error) {
+      useAppStore.getState().addToast("error", "Failed to open terminal", (error as Error).message);
+    } finally {
+      setLaunchingTerminal(false);
+    }
+  }
 
   return (
     <div className="run-detail">
@@ -120,6 +147,16 @@ export function RunDetail({ run }: Props) {
         </div>
         <div className="run-detail-header-actions">
           <button
+            className="btn btn-primary btn-sm"
+            type="button"
+            disabled={!terminalLaunchState.canLaunch || launchingTerminal}
+            title={terminalLaunchState.canLaunch ? `Open in ${terminalLaunchState.effectiveLauncherLabel}` : terminalLaunchState.disabledReason}
+            onClick={() => void handleOpenTerminal()}
+          >
+            <TerminalIcon size={13} />
+            {launchingTerminal ? "Opening..." : "Open in Terminal"}
+          </button>
+          <button
             className="btn btn-ghost btn-sm"
             type="button"
             disabled={configCount === 0}
@@ -145,6 +182,9 @@ export function RunDetail({ run }: Props) {
       </div>
 
       {run.error && <div className="run-detail-alert run-detail-alert-danger">{run.error}</div>}
+      {!terminalLaunchState.canLaunch && terminalLaunchState.disabledReason && (
+        <div className="run-detail-note text-muted text-sm">{terminalLaunchState.disabledReason}</div>
+      )}
       {run.followUpsReopened && (
         <div className="run-detail-alert run-detail-alert-info">
           Follow-ups were reopened manually
