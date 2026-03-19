@@ -4,11 +4,11 @@ import "@git-diff-view/react/styles/diff-view-pure.css";
 import type { BundledMcpStatus, Run } from "../../types.js";
 import { useAppStore, selectSelectedBatch } from "../../state/store.js";
 import {
-  apiContinueRun,
   apiCreateRunBranch,
   apiGetBundledMcpStatus,
   apiGetRunReview,
   apiInstallBundledMcp,
+  apiRequestRunCommit,
 } from "../../state/api.js";
 import { AlertIcon, GitIcon, PlayIcon, RefreshIcon, WrenchIcon } from "../../icons.js";
 import { splitDiff } from "../../utils/diffSplitter.js";
@@ -17,15 +17,6 @@ import { isPendingRunStatus } from "../../utils/runStatus.js";
 
 interface Props {
   run: Run;
-}
-
-function buildCommitPrompt(): string {
-  return [
-    "Inspect the current git worktree yourself and create exactly one commit for the changes that belong together.",
-    "Resolve the git worktree root with `git rev-parse --show-toplevel`, choose the files for the commit, write the commit message, and then call the MCP tool `create_commit` exactly once.",
-    "Pass the git worktree root as `working_folder`, pass only the selected file paths in `files`, and do not run `git commit` directly yourself.",
-    "After the MCP tool succeeds, reply with the commit SHA, branch, commit message, and any files you intentionally left uncommitted.",
-  ].join("\n\n");
 }
 
 export function ReviewTab({ run }: Props) {
@@ -86,7 +77,11 @@ export function ReviewTab({ run }: Props) {
   }, [files]);
   const hasLocalChanges = Boolean(review?.statusShort.trim());
   const runIsActive = isPendingRunStatus(run.status);
-  const followUpsDisabled = batch?.mode === "validated";
+  const validatorRun = batch?.runs.find((entry) => entry.kind === "validator") || null;
+  const validatedCommitOnly = batch?.mode === "validated";
+  const validatorFinished = validatedCommitOnly
+    ? Boolean(validatorRun && !isPendingRunStatus(validatorRun.status))
+    : true;
   const branchState = !review
     ? "unknown"
     : review.currentBranch
@@ -99,8 +94,8 @@ export function ReviewTab({ run }: Props) {
     && branchName.trim().length > 0;
   const canRequestCommit =
     Boolean(run.threadId && run.workingDirectory)
-    && !followUpsDisabled
     && !runIsActive
+    && validatorFinished
     && Boolean(review)
     && hasLocalChanges
     && (Boolean(review?.currentBranch) || (Boolean(run.worktreePath) && branchName.trim().length > 0));
@@ -124,8 +119,8 @@ export function ReviewTab({ run }: Props) {
         : "A worktree has not been created for this run yet.";
   const commitHint = !run.threadId || !run.workingDirectory
     ? "This run needs a Codex thread and working directory before it can receive a commit request."
-    : followUpsDisabled
-      ? "Validated batches are read-only after launch, so commit follow-up turns are disabled."
+    : validatedCommitOnly && !validatorFinished
+      ? "Validated batches allow commit follow-up only after the validator run has finished."
     : runIsActive
       ? "Wait for the current turn to finish before sending a commit request."
       : !review
@@ -200,7 +195,7 @@ export function ReviewTab({ run }: Props) {
         branchWasCreated = true;
       }
 
-      const payload = await apiContinueRun(batch.id, run.id, buildCommitPrompt());
+      const payload = await apiRequestRunCommit(batch.id, run.id);
       useAppStore.getState().setBatchDetail(payload.batch);
       useAppStore.getState().selectTab("session");
       useAppStore.getState().addToast(

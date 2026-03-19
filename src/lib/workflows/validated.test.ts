@@ -177,10 +177,10 @@ test("validated workflow launches validator after workers finish with expected o
   expect(calls[0]?.runId).toBe("run-1");
   expect(calls[1]?.runId).toBe("run-2");
   expect(calls[0]?.options?.developerInstructions).toBe(
-    "Submit your final results exactly once with `agents-runner-workflow.submit_result`.",
+    "Submit your final results exactly once with `agents-runner-workflow.submit_result`. These submitted results will be validated by a validator, which validates the results rather than the implementation code.",
   );
   expect(calls[1]?.options?.developerInstructions).toBe(
-    "Submit your final results exactly once with `agents-runner-workflow.submit_result`.",
+    "Submit your final results exactly once with `agents-runner-workflow.submit_result`. These submitted results will be validated by a validator, which validates the results rather than the implementation code.",
   );
   expect(calls[2]?.options?.sandboxModeOverride).toBe("read-only");
   expect(calls[2]?.options?.workingDirectoryOverride).toBe("/repo/project");

@@ -1326,18 +1326,67 @@ export async function continueRun(store: BatchStore, batchId: string, runId: str
     throw new Error("Reviewer runs are read-only and cannot be continued.");
   }
 
-  if (!runSnapshot.threadId) {
-    throw new Error("This run does not have a resumable Codex thread yet.");
+  return resumeRunWithPrompt(store, batch, runSnapshot, prompt);
+}
+
+export async function requestRunCommitFollowUp(store: BatchStore, batchId: string, runId: string): Promise<Batch | null> {
+  const batch = store.getBatch(batchId);
+  if (!batch) {
+    return null;
   }
 
-  if (!runSnapshot.workingDirectory) {
-    throw new Error("This run does not have a working directory yet.");
+  if (batch.cancelRequested) {
+    throw new Error("This batch has been cancelled and cannot accept new turns.");
   }
 
+  const runSnapshot = batch.runs.find((entry) => entry.id === runId);
+  if (!runSnapshot) {
+    throw new Error("Run not found.");
+  }
+
+  if (runSnapshot.kind === "reviewer" || runSnapshot.kind === "validator") {
+    throw new Error("Only worker runs can request a commit follow-up.");
+  }
+
+  if (batch.mode === "validated") {
+    const validatorRun = batch.runs.find((entry) => entry.kind === "validator");
+    if (!validatorRun || !isRunTerminalStatus(validatorRun.status)) {
+      throw new Error("Validated worker runs can request a commit only after the validator run has finished.");
+    }
+  }
+
+  return resumeRunWithPrompt(store, batch, runSnapshot, buildCommitFollowUpPrompt());
+}
+
+function buildCommitFollowUpPrompt(): string {
+  return [
+    "Inspect the current git worktree yourself and create exactly one commit for the changes that belong together.",
+    "Resolve the git worktree root with `git rev-parse --show-toplevel`, choose the files for the commit, write the commit message, and then call the MCP tool `create_commit` exactly once.",
+    "Pass the git worktree root as `working_folder`, pass only the selected file paths in `files`, and do not run `git commit` directly yourself.",
+    "After the MCP tool succeeds, reply with the commit SHA, branch, commit message, and any files you intentionally left uncommitted.",
+  ].join("\n\n");
+}
+
+async function resumeRunWithPrompt(
+  store: BatchStore,
+  batch: Batch,
+  runSnapshot: Run,
+  prompt: string,
+): Promise<Batch | null> {
+  const batchId = batch.id;
+  const runId = runSnapshot.id;
   const threadId = runSnapshot.threadId;
   const workingDirectory = runSnapshot.workingDirectory;
   const worktreePath = runSnapshot.worktreePath;
   const baseRef = runSnapshot.baseRef;
+
+  if (!threadId) {
+    throw new Error("This run does not have a resumable Codex thread yet.");
+  }
+
+  if (!workingDirectory) {
+    throw new Error("This run does not have a working directory yet.");
+  }
 
   const execution = getExecutionState(batchId);
   if (execution.runControllers.has(runId)) {

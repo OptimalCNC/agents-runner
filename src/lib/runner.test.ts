@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { buildCodexTurnConfig, continueRun, createRunId } from "./runner";
+import { buildCodexTurnConfig, continueRun, createRunId, requestRunCommitFollowUp } from "./runner";
 import { buildReviewPrompt } from "./workflows/ranked";
 import { buildMockBatch, buildMockRun, buildMockStore } from "./workflows/test-helpers";
 import type { Batch } from "../types";
@@ -123,5 +123,19 @@ test("continueRun rejects validated batches", async () => {
 
   await expect(continueRun(store, batch.id, run.id, "Follow up")).rejects.toThrow(
     "Validated batches are read-only and cannot accept follow-up turns.",
+  );
+});
+
+test("requestRunCommitFollowUp rejects validated runs before the validator finishes", async () => {
+  const batch = buildMockBatch({ mode: "validated" });
+  const workerRun = buildMockRun({ id: "run-1", kind: "candidate", status: "completed" });
+  workerRun.threadId = "thread-1";
+  workerRun.workingDirectory = "/repo/worktrees/run-1/project";
+  const validatorRun = buildMockRun({ id: "run-2", index: 1, kind: "validator", status: "running" });
+  batch.runs = [workerRun, validatorRun];
+  const store = buildMockStore(batch);
+
+  await expect(requestRunCommitFollowUp(store, batch.id, workerRun.id)).rejects.toThrow(
+    "Validated worker runs can request a commit only after the validator run has finished.",
   );
 });

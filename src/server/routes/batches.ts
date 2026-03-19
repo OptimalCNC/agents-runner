@@ -5,6 +5,7 @@ import {
   executeBatch,
   generateBatchTitle,
   previewBatchDelete,
+  requestRunCommitFollowUp,
 } from "../../lib/runner";
 import { readBody, sendError, sendJson, type ApiRouteHandler } from "../http";
 import {
@@ -132,6 +133,27 @@ export const handleBatchRoutes: ApiRouteHandler = async (context, request, respo
       sendJson(response, 202, { batch });
     } catch (error) {
       sendError(response, 409, (error as Error).message || "Failed to continue run.");
+    }
+    return true;
+  }
+
+  const commitRunMatch = url.pathname.match(/^\/api\/batches\/([^/]+)\/runs\/([^/]+)\/commit$/);
+  if (request.method === "POST" && commitRunMatch) {
+    try {
+      const batch = await requestRunCommitFollowUp(
+        context.store,
+        decodeURIComponent(commitRunMatch[1]),
+        decodeURIComponent(commitRunMatch[2]),
+      );
+
+      if (!batch) {
+        sendError(response, 404, "Batch not found.");
+        return true;
+      }
+
+      sendJson(response, 202, { batch });
+    } catch (error) {
+      sendError(response, 409, (error as Error).message || "Failed to request commit follow-up.");
     }
     return true;
   }

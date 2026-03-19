@@ -22,7 +22,10 @@ function buildValidatorTask(batch: Batch): GenerationTask {
 }
 
 function buildWorkerDeveloperInstructions(): string {
-  return "Submit your final results exactly once with `agents-runner-workflow.submit_result`.";
+  return [
+    "Submit your final results exactly once with `agents-runner-workflow.submit_result`.",
+    "These submitted results will be validated by a validator, which validates the results rather than the implementation code.",
+  ].join(" ");
 }
 
 function enforceWorkerSubmission(store: BatchStore, batchId: string, runId: string): void {

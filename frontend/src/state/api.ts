@@ -126,6 +126,15 @@ export async function apiContinueRun(batchId: string, runId: string, prompt: str
   );
 }
 
+export async function apiRequestRunCommit(batchId: string, runId: string): Promise<{ batch: Batch }> {
+  return fetchJson<{ batch: Batch }>(
+    `/api/batches/${encodeURIComponent(batchId)}/runs/${encodeURIComponent(runId)}/commit`,
+    {
+      method: "POST",
+    },
+  );
+}
+
 export async function apiGetBundledMcpStatus(): Promise<{ status: BundledMcpStatus }> {
   return fetchJson<{ status: BundledMcpStatus }>("/api/mcp/status");
 }
