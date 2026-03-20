@@ -401,16 +401,12 @@ export interface BundledMcpStatus {
 }
 
 export interface CreateCommitToolResult {
-  workingFolder: string;
   commitSha: string;
   branch: string;
   message: string;
-  stagedFiles: string[];
-  statSummary: string;
 }
 
 export interface SubmitScoreToolResult {
-  workingFolder: string;
   reviewedRunId: string;
   score: number;
   reason: string;

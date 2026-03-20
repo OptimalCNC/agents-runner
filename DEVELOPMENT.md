@@ -48,6 +48,15 @@ bun test
 bun run typecheck
 ```
 
+## Bundled MCP Contract
+
+The bundled workflow MCP server at `/mcp/workflow` uses canonical camelCase MCP fields only.
+
+- Use `protocolVersion`, `serverInfo`, `inputSchema`, `readOnlyHint`, `idempotentHint`, `openWorldHint`, `structuredContent`, and `isError`.
+- Do not add duplicate snake_case aliases for the same payload.
+- Put machine-readable tool data in `structuredContent`. Internal readers in this repo are expected to consume `result.structuredContent` directly instead of falling back to the raw result object.
+- Keep `content` concise. It exists for normal MCP tool-result text, not as a second copy of detailed structured data.
+
 Frontend-only checks:
 
 ```bash

@@ -84,7 +84,7 @@ function buildCreateCommitToolDefinition(): Record<string, unknown> {
       working_folder: {
         type: "string",
         minLength: 1,
-        description: "Absolute path to the run worktree root returned by git rev-parse --show-toplevel.",
+        description: "Absolute path to the managed worktree root.",
       },
       files: {
         type: "array",
@@ -93,12 +93,12 @@ function buildCreateCommitToolDefinition(): Record<string, unknown> {
           type: "string",
           minLength: 1,
         },
-        description: "File paths inside the selected worktree to stage for this commit.",
+        description: "Worktree-relative file paths to include in the commit.",
       },
       message: {
         type: "string",
         minLength: 1,
-        description: "Commit message to use for the single commit.",
+        description: "Commit message.",
       },
     },
   };
@@ -106,21 +106,15 @@ function buildCreateCommitToolDefinition(): Record<string, unknown> {
   return {
     name: MCP_TOOL_NAME_CREATE_COMMIT,
     title: "Create Commit",
-    description: "Stage only the selected files in a managed Agents Runner worktree and create a single git commit.",
+    description: "Create one commit from selected files in a managed worktree.",
     inputSchema,
-    input_schema: inputSchema,
     annotations: {
       readOnlyHint: false,
-      read_only_hint: false,
       idempotentHint: false,
-      idempotent_hint: false,
       openWorldHint: false,
-      open_world_hint: false,
     },
   };
 }
-
-
 
 function buildSubmitScoreToolDefinition(): Record<string, unknown> {
   const inputSchema = {
@@ -131,23 +125,23 @@ function buildSubmitScoreToolDefinition(): Record<string, unknown> {
       working_folder: {
         type: "string",
         minLength: 1,
-        description: "Absolute path to the reviewed run worktree root returned by git rev-parse --show-toplevel.",
+        description: "Absolute path to the managed worktree root.",
       },
       reviewed_run_id: {
         type: "string",
         minLength: 1,
-        description: "Run id being reviewed (for example run-1).",
+        description: "Run ID being reviewed.",
       },
       score: {
         type: "number",
         minimum: 0,
         maximum: 100,
-        description: "Numeric score for the reviewed run.",
+        description: "Numeric score.",
       },
       reason: {
         type: "string",
         minLength: 1,
-        description: "Concise reason for the score.",
+        description: "Score justification.",
       },
     },
   };
@@ -155,16 +149,12 @@ function buildSubmitScoreToolDefinition(): Record<string, unknown> {
   return {
     name: MCP_TOOL_NAME_SUBMIT_SCORE,
     title: "Submit Score",
-    description: "Submit a reviewer score for exactly one managed Agents Runner run.",
+    description: "Submit one reviewer score for a managed run.",
     inputSchema,
-    input_schema: inputSchema,
     annotations: {
       readOnlyHint: false,
-      read_only_hint: false,
       idempotentHint: false,
-      idempotent_hint: false,
       openWorldHint: false,
-      open_world_hint: false,
     },
   };
 }
@@ -178,7 +168,7 @@ function buildSubmitResultToolDefinition(): Record<string, unknown> {
       working_folder: {
         type: "string",
         minLength: 1,
-        description: "Absolute path to the worker run worktree root returned by git rev-parse --show-toplevel.",
+        description: "Absolute path to the managed worktree root.",
       },
       files: {
         type: "array",
@@ -191,16 +181,16 @@ function buildSubmitResultToolDefinition(): Record<string, unknown> {
             path: {
               type: "string",
               minLength: 1,
-              description: "File path inside the selected worktree that should be reviewed by the validator.",
+              description: "Worktree-relative file path.",
             },
             explanation: {
               type: "string",
               minLength: 1,
-              description: "Why this file matters for the worker's final result.",
+              description: "Why this file matters.",
             },
           },
         },
-        description: "Files that capture the worker's final result, each paired with a concise explanation.",
+        description: "Final result files with explanations.",
       },
     },
   };
@@ -208,16 +198,12 @@ function buildSubmitResultToolDefinition(): Record<string, unknown> {
   return {
     name: MCP_TOOL_NAME_SUBMIT_RESULT,
     title: "Submit Result",
-    description: "Submit the final worker result files and explanations for validator review in a managed Agents Runner worktree.",
+    description: "Submit final result files for a managed worker run.",
     inputSchema,
-    input_schema: inputSchema,
     annotations: {
       readOnlyHint: false,
-      read_only_hint: false,
       idempotentHint: false,
-      idempotent_hint: false,
       openWorldHint: false,
-      open_world_hint: false,
     },
   };
 }
@@ -230,43 +216,29 @@ function buildInitializeResult(protocolVersion: string): Record<string, unknown>
   const capabilities = {
     tools: {
       listChanged: false,
-      list_changed: false,
     },
   };
 
   return {
     protocolVersion,
-    protocol_version: protocolVersion,
     capabilities,
     serverInfo,
-    server_info: serverInfo,
-    instructions: "Use create_commit for candidate commits, submit_score for reviewer scoring, and submit_result for validated worker result submission in managed Agents Runner worktrees.",
+    instructions: "Use create_commit, submit_score, and submit_result in managed worktrees.",
   };
 }
 
 function buildCreateCommitToolResult(result: Awaited<ReturnType<typeof createManagedWorktreeCommit>>): Record<string, unknown> {
-  const branchLabel = result.branch || "(detached)";
-  const summaryLine = result.statSummary || `Staged files: ${result.stagedFiles.join(", ")}`;
-
   return {
     content: [
       {
         type: "text",
-        text: `Created commit ${result.commitSha} on ${branchLabel}: ${result.message}`,
-      },
-      {
-        type: "text",
-        text: summaryLine,
+        text: `Created commit ${result.commitSha}.`,
       },
     ],
     structuredContent: result,
-    structured_content: result,
     isError: false,
-    is_error: false,
   };
 }
-
-
 
 function buildSubmitScoreToolResult(result: Awaited<ReturnType<typeof submitManagedRunScore>>): Record<string, unknown> {
   return {
@@ -275,15 +247,9 @@ function buildSubmitScoreToolResult(result: Awaited<ReturnType<typeof submitMana
         type: "text",
         text: `Submitted score ${result.score} for ${result.reviewedRunId}.`,
       },
-      {
-        type: "text",
-        text: result.reason,
-      },
     ],
     structuredContent: result,
-    structured_content: result,
     isError: false,
-    is_error: false,
   };
 }
 
@@ -294,15 +260,9 @@ function buildSubmitResultToolResult(result: Awaited<ReturnType<typeof submitMan
         type: "text",
         text: `Submitted ${result.files.length} result file${result.files.length === 1 ? "" : "s"} for ${result.runId}.`,
       },
-      ...result.files.map((file) => ({
-        type: "text",
-        text: `${file.path}: ${file.explanation}`,
-      })),
     ],
     structuredContent: result,
-    structured_content: result,
     isError: false,
-    is_error: false,
   };
 }
 

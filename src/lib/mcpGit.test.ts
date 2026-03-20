@@ -71,7 +71,6 @@ test("createManagedWorktreeCommit stages the selected files and creates one comm
 
   expect(result.branch).toBe("main");
   expect(result.message).toBe("Update readme");
-  expect(result.stagedFiles).toEqual(["README.md"]);
   expect(headSubject.stdout.trim()).toBe("Update readme");
 });
 

@@ -46,7 +46,7 @@ function extractLatestTurnReviewerScore(turn: RunTurn): number | null {
     }
 
     const result = item.result as Record<string, unknown> | undefined;
-    const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
+    const structured = result?.structuredContent as Record<string, unknown> | undefined;
     return normalizeNumericScore(structured?.score);
   }
 

@@ -79,7 +79,6 @@ export async function submitManagedRunScore(
   }
 
   return {
-    workingFolder: worktree.worktreePath,
     reviewedRunId: args.reviewed_run_id,
     score: args.score,
     reason: args.reason,

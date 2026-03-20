@@ -176,18 +176,14 @@ export async function createManagedWorktreeCommit(
 
   await runCommand("git", ["-C", worktree.worktreePath, "commit", "-m", args.message]);
 
-  const [commitSha, currentBranch, statResult] = await Promise.all([
+  const [commitSha, currentBranch] = await Promise.all([
     runCommand("git", ["-C", worktree.worktreePath, "rev-parse", "HEAD"]),
     readCurrentBranch(worktree.worktreePath),
-    runCommand("git", ["-C", worktree.worktreePath, "show", "--stat", "--format=format:", "-1"]),
   ]);
 
   return {
-    workingFolder: worktree.worktreePath,
     commitSha: commitSha.stdout.trim(),
     branch: currentBranch,
     message: args.message,
-    stagedFiles: stagedAfter,
-    statSummary: statResult.stdout.trim(),
   };
 }

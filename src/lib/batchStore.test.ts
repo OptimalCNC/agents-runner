@@ -145,7 +145,7 @@ test("load normalizes stale ranked batches and recomputes average scores", async
             tool: "submit_score",
             status: "completed",
             result: {
-              structured_content: {
+              structuredContent: {
                 reviewedRunId: "run-1",
                 score: 60,
                 reason: "okay",
@@ -214,7 +214,7 @@ test("load normalizes stale ranked batches and recomputes average scores", async
             tool: "submit_score",
             status: "completed",
             result: {
-              structured_content: {
+              structuredContent: {
                 reviewedRunId: "run-1",
                 score: 80,
                 reason: "good",

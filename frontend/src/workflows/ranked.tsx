@@ -20,7 +20,7 @@ function parseReviewerGlance(run: Run): ReviewerGlance {
       if (item.type !== "mcp_tool_call") continue;
       if (String(item.server ?? "") !== "agents-runner-workflow" || String(item.tool ?? "") !== "submit_score") continue;
       const result = item.result as Record<string, unknown> | undefined;
-      const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
+      const structured = result?.structuredContent as Record<string, unknown> | undefined;
       const score = normalizeScore(structured?.score) ?? fallbackScore;
       const reason = String(structured?.reason ?? "").trim();
       return { run, score, reason };

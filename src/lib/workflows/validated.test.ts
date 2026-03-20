@@ -64,7 +64,7 @@ test("buildValidatorPrompt composes checker prompt, worker XML, and original tas
     tool: "submit_result",
     status: "completed",
     result: {
-      structured_content: {
+      structuredContent: {
         workingFolder: "/repo/worktrees/run-1",
         runId: "run-1",
         files: [
@@ -153,7 +153,7 @@ test("validated workflow builds validator execution options from worker outputs"
     tool: "submit_result",
     status: "completed",
     result: {
-      structured_content: {
+      structuredContent: {
         workingFolder: "/repo/worktrees/run-1",
         runId: "run-1",
         files: [{ path: "project/src/run-1.ts", explanation: "Final implementation for run-1." }],
@@ -173,7 +173,7 @@ test("validated workflow builds validator execution options from worker outputs"
     tool: "submit_result",
     status: "completed",
     result: {
-      structured_content: {
+      structuredContent: {
         workingFolder: "/repo/worktrees/run-2",
         runId: "run-2",
         files: [{ path: "project/src/run-2.ts", explanation: "Final implementation for run-2." }],

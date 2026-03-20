@@ -135,7 +135,7 @@ export function buildMockReviewerRunWithScore(score: number): Run {
         tool: "submit_score",
         status: "completed",
         result: {
-          structured_content: {
+          structuredContent: {
             reviewedRunId: "run-1",
             score,
             reason: "good",
@@ -191,7 +191,7 @@ export function buildMockWorkerRunWithSubmission(files: SubmitResultToolFile[]):
         tool: "submit_result",
         status: "completed",
         result: {
-          structured_content: {
+          structuredContent: {
             workingFolder: "/repo/worktrees/run-1",
             runId: "run-1",
             files,

@@ -108,7 +108,7 @@ test("extractLatestWorkerResultSubmissionFromMcp returns the latest completed wo
     tool: "submit_result",
     status: "completed",
     result: {
-      structured_content: {
+      structuredContent: {
         workingFolder: "/repo/worktrees/run-1",
         runId: "run-1",
         files: [

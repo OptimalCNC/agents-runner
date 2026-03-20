@@ -27,7 +27,7 @@ export function normalizeNumericScore(value: unknown): number | null {
 
 function extractStructuredMcpResult(item: Record<string, unknown>): Record<string, unknown> | null {
   const result = item.result as Record<string, unknown> | undefined;
-  const structured = (result?.structuredContent || result?.structured_content || result) as Record<string, unknown> | undefined;
+  const structured = result?.structuredContent as Record<string, unknown> | undefined;
   return structured && typeof structured === "object" ? structured : null;
 }
 
